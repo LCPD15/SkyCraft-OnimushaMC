@@ -72,6 +72,8 @@ public final class WorldExporter {
 	private static final LongOpenHashSet DUG = new LongOpenHashSet(); // sections Skyrim holds dug cells for
 	private static final ByteBuffer LIGHTS = ByteBuffer.allocate(16 * 16 * 16 * 8).order(ByteOrder.LITTLE_ENDIAN);
 	private static int sentGeneration = Integer.MIN_VALUE;
+	private static int sentHostEpoch = Integer.MIN_VALUE;
+	private static int sentWorldId = Integer.MIN_VALUE;
 	private static int meshesSent;
 	private static ClientLevel sentLevel;
 	private static SkyAtlas atlas;
@@ -105,7 +107,9 @@ public final class WorldExporter {
 		if (level == null || minecraft.player == null || !SkyLink.active()) {
 			return;
 		}
-		if (sentGeneration != SkyLink.generation() || sentLevel != level || atlas == null || atlas.stale(minecraft)) {
+		var host = dev.skycraft.client.SkyClient.sky();
+		if (sentGeneration != SkyLink.generation() || sentHostEpoch != host.collisionEpoch
+			|| sentWorldId != host.worldId || sentLevel != level || atlas == null || atlas.stale(minecraft)) {
 			resendEverything(minecraft, level);
 		}
 		meshDirtySections(level);
@@ -120,6 +124,8 @@ public final class WorldExporter {
 
 	private static void resendEverything(Minecraft minecraft, ClientLevel level) {
 		sentGeneration = SkyLink.generation();
+		sentHostEpoch = dev.skycraft.client.SkyClient.sky().collisionEpoch;
+		sentWorldId = dev.skycraft.client.SkyClient.sky().worldId;
 		sentLevel = level;
 		atlas = SkyAtlas.build(minecraft);
 		SkyCraft.LOG.info("SkyCraft: {} animated textures (water, lava, fire, ...) will play in Skyrim", atlas.animatedSprites());

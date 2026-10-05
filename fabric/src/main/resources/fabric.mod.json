@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "id": "skycraft",
   "version": "${version}",
-  "name": "SkyCraft",
-  "description": "Play Skyrim with Minecraft physics, inventory and viewmodels.",
-  "authors": ["chasmlol"],
+  "name": "SkyCraft: Onimusha MC",
+  "description": "Onimusha REFramework bridge: Minecraft controls, combat, HUD, items and colliding blocks. Native HP is shown as ten percentage-based hearts. Experimental; native terrain is protected.",
+  "authors": ["chasmlol (SkyCraft)", "LCPD15/LCPD拉灯 (Onimusha adaptation)"],
   "contact": {
-    "sources": "https://github.com/chasmlol/SkyCraft"
+    "sources": "https://github.com/LCPD15/SkyCraft-OnimushaMC"
   },
   "license": "MIT",
   "environment": "client",

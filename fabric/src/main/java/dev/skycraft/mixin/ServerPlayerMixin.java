@@ -24,9 +24,14 @@ public abstract class ServerPlayerMixin {
 	}
 
 	/** Dying in Minecraft is dying in Skyrim: the host's through the link, a guest's through theirs. */
-	@Inject(method = "die", at = @At("HEAD"))
+	@Inject(method = "die", at = @At("HEAD"), cancellable = true)
 	private void skycraft$diesInSkyrim(DamageSource source, CallbackInfo ci) {
 		ServerPlayer self = (ServerPlayer) (Object) this;
+		if (dev.skycraft.combat.HostHealth.intercepts(self)) {
+			// Native death/respawn must not discard MC inventory or send EV_PLAYER_DIED back.
+			ci.cancel();
+			return;
+		}
 		int attacker = SkyCombat.attackerFormId(source);
 		if (!dev.skycraft.net.SkyNet.isHost(self)) {
 			if (net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.canSend(self, dev.skycraft.net.SkyNet.Died.TYPE)) {

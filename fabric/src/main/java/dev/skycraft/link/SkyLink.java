@@ -115,6 +115,11 @@ public final class SkyLink {
 				skyrimPid = pid;
 				overlayBack = 1;
 				generation++;
+				try {
+					shm.set(JAVA_INT, OFF_HEADER + H_MC_PID, (int) GET_CURRENT_PROCESS_ID.invokeExact());
+				} catch (Throwable t) {
+					SkyCraft.LOG.warn("SkyCraft: couldn't re-register Minecraft with the restarted host", t);
+				}
 				SkyCraft.LOG.info("SkyCraft: Skyrim instance changed (pid {})", pid);
 			}
 			return;
@@ -202,6 +207,21 @@ public final class SkyLink {
 		public int teleportSeq;
 		public int viewportW, viewportH;
 		public float gameHour;
+		public float healthCurrent, healthMax;
+		public double hostUnitsPerBlock;
+		public int healthRevision;
+
+		public boolean authoritativeHealth() {
+			return (this.flags & SKY_AUTHORITATIVE_HEALTH) != 0;
+		}
+
+		public boolean hostDead() {
+			return (this.flags & SKY_HOST_DEAD) != 0;
+		}
+
+		public boolean mcLook() {
+			return (this.flags & SKY_MC_LOOK) != 0;
+		}
 
 		public boolean inGame() {
 			return (this.flags & SKY_IN_GAME) != 0;
@@ -283,6 +303,10 @@ public final class SkyLink {
 			out.viewportW = s.get(JAVA_INT, b + SS_VIEWPORT_W);
 			out.viewportH = s.get(JAVA_INT, b + SS_VIEWPORT_H);
 			out.gameHour = s.get(JAVA_FLOAT, b + SS_GAME_HOUR);
+			out.healthCurrent = s.get(JAVA_FLOAT, b + SS_HEALTH_CURRENT);
+			out.healthMax = s.get(JAVA_FLOAT, b + SS_HEALTH_MAX);
+			out.hostUnitsPerBlock = s.get(JAVA_DOUBLE, b + SS_HOST_UNITS_PER_BLOCK);
+			out.healthRevision = s.get(JAVA_INT, b + SS_HEALTH_REVISION);
 			VarHandle.loadLoadFence();
 			int seq2 = (int) INT.getAcquire(s, b + SS_SEQ);
 			if (seq1 == seq2) {

@@ -4,6 +4,23 @@ plugins {
 }
 
 repositories {
+	// Optional task-local mirror populated from official repositories with verified checksums.
+	// Useful where Windows' configured proxy works but Java's TLS transport does not.
+	if (System.getenv('ONIMUSHA_MAVEN_MIRROR')) {
+		exclusiveContent {
+			forRepository {
+				maven {
+					url = uri(System.getenv('ONIMUSHA_MAVEN_MIRROR'))
+					metadataSources { mavenPom(); artifact() }
+				}
+			}
+			filter { includeGroup('net.fabricmc.fabric-api') }
+		}
+		maven {
+			url = uri(System.getenv('ONIMUSHA_MAVEN_MIRROR'))
+			metadataSources { mavenPom(); artifact() }
+		}
+	}
 	// Modrinth: e4mc (share a world over the internet, for multiplayer testing).
 	maven {
 		url = "https://api.modrinth.com/maven"
@@ -45,7 +62,7 @@ dependencies {
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 
 	// e4mc 6.2.2 (Fabric, 26.1-26.3): "Open to LAN" gives a link friends can join over the internet.
-	runtimeOnly "maven.modrinth:e4mc:AouleFRY"
+	// This first Onimusha bridge is single-player; no relay or multiplayer networking dependency.
 
 	testImplementation platform("org.junit:junit-bom:5.11.4")
 	testImplementation "org.junit.jupiter:junit-jupiter"
@@ -79,6 +96,8 @@ java {
 	sourceCompatibility = JavaVersion.VERSION_25
 	targetCompatibility = JavaVersion.VERSION_25
 }
+
+base { archivesName = "skycraft-onimusha" }
 
 jar {
 	def projectName = project.name

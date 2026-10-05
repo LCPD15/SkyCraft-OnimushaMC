@@ -33,7 +33,8 @@ public final class DestructionToggle {
 	}
 
 	public static void register() {
-		load();
+		// This fork supports placing/removing MC blocks only. Native geometry is protected.
+		SkyDig.destruction = false;
 		ScreenEvents.AFTER_INIT.register((minecraft, screen, width, height) -> {
 			if (screen instanceof PauseScreen pause && pause.showsPauseMenu() && minecraft.player != null) {
 				Screens.getWidgets(screen).add(button(minecraft));
@@ -49,15 +50,14 @@ public final class DestructionToggle {
 			b.setMessage(label());
 			save();
 			SkyCraft.LOG.info("SkyCraft: Skyrim destruction {}", SkyDig.destruction ? "on" : "off");
-		}).bounds(4, 4, 150, 20).tooltip(Tooltip.create(Component.literal(host
-			? "Mining Skyrim's ground and rocks, and explosions, dig into Skyrim's world. Holes already dug stay either way."
-			: "In a friend's world, their setting decides."))).build();
-		button.active = host;
+		}).bounds(4, 4, 190, 20).tooltip(Tooltip.create(Component.literal(
+			"Only Minecraft blocks can be placed or removed. Onimusha terrain and quest objects are protected."))).build();
+		button.active = false;
 		return button;
 	}
 
 	private static Component label() {
-		return Component.literal("Skyrim destruction: " + (SkyDig.destruction ? "On" : "Off"));
+		return Component.literal("Onimusha terrain: Protected");
 	}
 
 	private static void load() {

@@ -4,6 +4,7 @@ import dev.skycraft.SkyCraft;
 import dev.skycraft.client.render.WorldExporter;
 import dev.skycraft.link.Proto;
 import dev.skycraft.link.SkyLink;
+import dev.skycraft.link.HostRotation;
 import dev.skycraft.world.SkyCollision;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
@@ -46,6 +47,7 @@ public final class SkyClient {
 	private static int lastPacedSeq;
 	private static boolean skyrimStalled;
 	private static int exporterErrors;
+	private static int lastLinkGeneration = Integer.MIN_VALUE;
 
 	private SkyClient() {
 	}
@@ -101,6 +103,18 @@ public final class SkyClient {
 		if (!linked) {
 			return;
 		}
+		if (lastLinkGeneration != SkyLink.generation()) {
+			lastLinkGeneration = SkyLink.generation();
+			// A new host may reuse teleportSeq/epoch values. Its position must win before MC moves.
+			InputBridge.releaseAll();
+			lastTeleportSeq = -1;
+			teleportAck = 0;
+			teleportPending = true;
+			lastPlayer = null;
+			holdPos = null;
+			holdSince = 0;
+			eyePlayer = null;
+		}
 
 		Minecraft minecraft = Minecraft.getInstance();
 		hideWindowOnce(minecraft);
@@ -135,12 +149,11 @@ public final class SkyClient {
 			holdPos = new Vec3(sky.x, sky.y, sky.z);
 		}
 
-		// Look direction is driven by Skyrim (zero-latency camera); MC uses it for everything else.
+		// Host-controlled look follows the host. MC-controlled look changes only on teleport.
 		if (minecraft.gui.screen() == null) {
-			player.setYRot(sky.yaw);
-			player.setXRot(sky.pitch);
-			player.yRotO = sky.yaw;
-			player.xRotO = sky.pitch;
+			var current = new HostRotation.Angles(player.getYRot(), player.getXRot());
+			var rotation = HostRotation.resolve(current, sky.yaw, sky.pitch, false, sky.mcLook());
+			if (rotation != current) applyRotation(player, rotation);
 		}
 	}
 
@@ -274,7 +287,8 @@ public final class SkyClient {
 			holdSince = System.currentTimeMillis();
 		}
 		int bx = (int) Math.floor(holdPos.x), by = (int) Math.floor(holdPos.y), bz = (int) Math.floor(holdPos.z);
-		boolean known = SkyCollision.isKnown(bx, by - 1, bz) && SkyCollision.isKnown(bx, by, bz)
+		boolean known = SkyCollision.currentSession(sky.collisionEpoch)
+			&& SkyCollision.isKnown(bx, by - 1, bz) && SkyCollision.isKnown(bx, by, bz)
 			&& SkyCollision.isKnown(bx, by - SkyCollision.REGION_SIZE, bz);
 		// Release once there is actual ground below (or after a timeout, e.g. when mid-air on purpose).
 		boolean ready = known && (SkyCollision.hasSolidBelow(bx, by, bz, 12) || System.currentTimeMillis() - holdSince > 6000);
@@ -306,7 +320,9 @@ public final class SkyClient {
 
 	private static void requestTeleport(Minecraft minecraft, double x, double y, double z, float yaw, float pitch) {
 		LocalPlayer player = minecraft.player;
+		var rotation = HostRotation.resolve(new HostRotation.Angles(player.getYRot(), player.getXRot()), yaw, pitch, true, sky.mcLook());
 		player.setPos(x, y, z);
+		applyRotation(player, rotation);
 		player.setDeltaMovement(Vec3.ZERO);
 		player.resetFallDistance();
 		var server = minecraft.getSingleplayerServer();
@@ -315,14 +331,20 @@ public final class SkyClient {
 			server.execute(() -> {
 				ServerPlayer sp = server.getPlayerList().getPlayer(uuid);
 				if (sp != null) {
-					sp.teleportTo(x, y, z);
-					sp.setYRot(yaw);
-					sp.setXRot(pitch);
+					// The three-coordinate overload deliberately keeps client rotation relative.
+					sp.teleportTo(sp.level(), x, y, z, java.util.Set.of(), rotation.yaw(), rotation.pitch(), true);
 					sp.resetFallDistance();
 				}
 			});
 		}
 		SkyCraft.LOG.info("SkyCraft: teleported to {} {} {}", x, y, z);
+	}
+
+	private static void applyRotation(LocalPlayer player, HostRotation.Angles rotation) {
+		player.setYRot(rotation.yaw());
+		player.setXRot(rotation.pitch());
+		player.yRotO = rotation.yaw();
+		player.xRotO = rotation.pitch();
 	}
 
 	/** After GameRenderer.render(): report the player to Skyrim and ship the overlay frame. */

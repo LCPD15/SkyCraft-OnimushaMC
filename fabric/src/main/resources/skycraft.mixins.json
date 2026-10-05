@@ -3,6 +3,7 @@
   "package": "dev.skycraft.mixin",
   "compatibilityLevel": "JAVA_25",
   "mixins": [
+    "AuthoritativeHealthMixin",
     "AbstractArrowMixin",
     "BlockCollisionsMixin",
     "BlockStateBaseMixin",

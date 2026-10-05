@@ -1,4 +1,4 @@
-// SkyCraft shared-memory protocol (Skyrim SKSE plugin <-> Minecraft Fabric mod).
+// Onimusha MC fork shared-memory protocol (REFramework plugin <-> Minecraft Fabric mod).
 //
 // This header is the single source of truth for the byte layout. The Java side mirrors it in
 // fabric/src/main/java/dev/skycraft/link/Proto.java; if you change anything here, change it
@@ -13,11 +13,11 @@
 namespace skycraft::proto
 {
 	inline constexpr std::uint32_t kMagic = 0x43594B53;  // "SKYC"
-	inline constexpr std::uint32_t kVersion = 11;
-	inline constexpr wchar_t       kMappingName[] = L"Local\\SkyCraft_v1";
+	inline constexpr std::uint32_t kVersion = 12;
+	inline constexpr wchar_t       kMappingName[] = L"Local\\OnimushaMC_v1";
 
 	// 1 Minecraft block == 70 Skyrim units (Skyrim player ~128 units tall, MC player 1.8 blocks).
-	inline constexpr double kUnitsPerBlock = 70.0;
+	inline constexpr double kUnitsPerBlock = 1.0;  // RE world metres; host publishes its calibrated scale below.
 
 	// ---- region offsets ---------------------------------------------------------------------
 	inline constexpr std::uint64_t kOffHeader = 0x0;
@@ -59,6 +59,10 @@ namespace skycraft::proto
 		kSkyInGame = 1u << 0,    // a save is loaded and the player exists
 		kSkyMenuOpen = 1u << 1,  // a Skyrim menu owns input; MC should drop held keys
 		kSkyLoading = 1u << 2,   // loading screen / cell transition in progress
+		kSkyAuthoritativeHealth = 1u << 3, // healthCurrent/healthMax are finite, valid host-owned HP
+		kSkyHostDead = 1u << 4,            // Onimusha owns death and respawn; MC must not kill it again
+		kSkyNativeTerrainProtected = 1u << 5, // native terrain is never mined; MC blocks remain breakable
+		kSkyMcLook = 1u << 6,             // MC owns yaw/pitch, rather than copying host look each frame
 	};
 
 	// Skyrim's water (lakes, rivers, the sea) around the player, for Minecraft to treat as its own
@@ -86,8 +90,13 @@ namespace skycraft::proto
 		std::uint32_t teleportSeq;       // MC teleports its player to pos when this changes
 		std::uint32_t viewportW, viewportH;
 		float         gameHour;
+		float         healthCurrent;     // +0x40: native game HP, never MC's own health pool
+		float         healthMax;         // +0x44: hearts = clamp(current/max, 0, 1) * 20
+		double        hostUnitsPerBlock; // +0x48: host engine units per MC block (default 1 metre)
+		std::uint32_t healthRevision;    // +0x50: diagnostic revision of host HP state
+		std::uint32_t hostPad;           // +0x54
 	};
-	static_assert(sizeof(SkyState) == 0x40);
+	static_assert(sizeof(SkyState) == 0x58);
 
 	// ---- MC -> Skyrim state @0x200 (seqlock) ------------------------------------------------
 	enum McFlags : std::uint32_t
@@ -180,6 +189,7 @@ namespace skycraft::proto
 		kInReleaseAll = 6,   // release every held key/button (input focus left MC)
 		kInHurt = 7,         // Skyrim hit the player: code = HurtKind, a = Skyrim damage * 100, b = attacker FormID, c = HurtFlags
 		kInOpenMenu = 8,     // open Minecraft's pause/options menu
+		kInLookDelta = 9,    // raw mouse pixel delta a=dx, b=dy; MC applies its sensitivity/inversion
 	};
 
 	enum HurtKind : std::uint16_t
@@ -194,6 +204,8 @@ namespace skycraft::proto
 	{
 		kHurtBlockedInSkyrim = 1u << 0,
 		kHurtPowerAttack = 1u << 1,
+		kHurtHostUnapplied = 1u << 2, // host cancelled HP deduction: IN_HURT.a is MC points*100;
+		                             // MC armour/shield pipeline then requests host HP through EV_HEALTH_CHANGE.
 	};
 
 	// ---- actor table @0x12000 (Skyrim -> MC, seqlock) ----------------------------------------
@@ -247,6 +259,14 @@ namespace skycraft::proto
 		                    // flags = flight pitch (float bits), weapon = arrow texture (0 plain, 1 tipped, 2 spectral)
 		kEvSkillUse = 5,    // the player used a Skyrim skill in Minecraft: formId = Skyrim skill (ActorValue: 9 Block,
 		                    // 10 Smithing, 11 Heavy Armor, 12 Light Armor), a = uses (as Skyrim's AdvanceSkill counts them)
+		kEvHealthChange = 6, // request, never absolute HP: a = signed fraction of host max HP,
+		                     // b = signed MC health points, flags = HealthChangeFlags,
+		                     // weapon = collisionEpoch (reject requests from another world/session).
+	};
+	enum HealthChangeFlags : std::uint32_t
+	{
+		kHealthDamage = 1u << 0,
+		kHealthHeal = 1u << 1,
 	};
 
 	enum HitFlags : std::uint32_t

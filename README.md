@@ -1,214 +1,72 @@
-# SkyCraft
+# SkyCraft — OnimushaMC
 
-![SkyCraft: a Minecraft player walking through Riverwood with the Minecraft HUD](docs/screenshot.jpg)
+**开发中的鬼武者适配 / Experimental Onimusha adapter.**
 
-Play Skyrim as a Minecraft player. You move with Minecraft's physics, carry Minecraft's inventory
-and HUD, and place and break blocks in Skyrim's world. You fight Skyrim's NPCs with Minecraft
-weapons, and they fight back.
+本分支基于 [chasmlol/SkyCraft](https://github.com/chasmlol/SkyCraft)，把原有的 Minecraft Fabric 客户端、共享内存协议、方块网格和 HUD 输出接到鬼武者的 REFramework 插件。Minecraft 执行移动、视角、物品和战斗逻辑；鬼武者保留场景、敌人、任务和存档。
 
-Neither game is rewritten. Minecraft runs its own game logic, and Skyrim runs its world, NPCs,
-quests and saves. A Skyrim SKSE plugin and a Minecraft Fabric mod talk to each other through
-shared memory. Minecraft runs hidden in the background, and Skyrim draws everything.
+This fork connects SkyCraft's Minecraft Fabric client, shared-memory protocol, block meshes and HUD to an Onimusha REFramework plugin. Minecraft owns movement, camera, items and combat; Onimusha retains its world, enemies, quests and saves.
 
-> **Status: early and experimental.** Expect rough edges, and back up your saves.
-> This is a fan project. It isn't affiliated with Mojang, Microsoft, Bethesda or ZeniMax, and you
-> need to own both games.
+**当前范围仅限 `OnimushaWotS` / Target: `ONIMUSHA_WOTS` only.** 生化危机、怪物猎人以及其他 RE 引擎游戏需要独立的角色、相机、碰撞和伤害绑定，不能直接使用本适配。
 
-## What works
+## 组件 / Components
 
-- **Movement:** Minecraft movement on Skyrim's terrain and buildings. That covers walking,
-  sprinting, jumping, crouching, swimming and falling, and Skyrim's collision is fed into
-  Minecraft's own collision.
-- **Blocks:** place and break blocks anywhere in Skyrim. They're drawn inside Skyrim's frame
-  with its sun, shadows, fog and weather. Minecraft lights (torches, lava, glowstone and so on)
-  light up Skyrim.
-- **Digging into Skyrim:** mine Skyrim's ground, rocks, roads and objects like Minecraft blocks.
-  What you dig out drops as the block it's made of (dirt under grass, then stone with ores, then
-  bedrock), and the hole is real for you, NPCs and items. TNT, creepers and other explosions blow
-  craters into Skyrim. Interiors and caves are solid stone behind their walls. What you dig is
-  saved in your Minecraft world. **Skyrim destruction: On/Off** in the top left of the pause menu
-  (O) turns it off (holes already dug stay).
-- **Block entities:** chests, beds, banners, heads, shulker boxes and similar blocks are drawn,
-  and pistons move blocks.
-- **Water and lava:** they flow over Skyrim's terrain, and Skyrim water swims like Minecraft
-  water.
-- **Combat:** hit Skyrim NPCs with any Minecraft weapon, including bows, tridents and TNT.
-  Damage is scaled to NPC level, and NPCs fight back.
-  - NPCs collide with blocks and path around them.
-  - Lava and fire hurt NPCs, and NPCs press pressure plates.
-- **Skyrim progression:**
-  - Your Skyrim skills level up from Minecraft play. Swords, maces and tools train
-    One-Handed; axes and spears train Two-Handed; bows and anything thrown train Archery.
-  - Shields train Block, and hits taken train Light or Heavy Armor depending on what you wear.
-  - Crafting gear trains Smithing, and crouching is Skyrim sneak, which trains Sneak.
-- **Camera and death:** Minecraft's F5 camera modes show your skin and armor in Skyrim. Dying
-  gives Skyrim's death camera with your Minecraft body ragdolling.
-- **Skyrim's own animations:** chairs, crafting stations, beds, pull levers, horses and scripted
-  scenes hand control to Skyrim until they finish.
-- **Multiplayer (Minecraft side only):** friends who also run SkyCraft can join your Minecraft
-  world over the internet (see [Playing with friends](#playing-with-friends)).
-
-## Requirements
-
-**Skyrim**
-
-| | |
+| 路径 / Path | 用途 / Purpose |
 |---|---|
-| Skyrim Special Edition, **Anniversary Edition runtime** (1.6.x / 1.7.x) | Developed and tested on **1.7.104**. Not SE 1.5.97, not VR. |
-| [SKSE64](https://skse.silverlock.org/) | For your game version |
-| [Address Library for SKSE Plugins](https://www.nexusmods.com/skyrimspecialedition/mods/32444) | The "All in one (Anniversary Edition)" file |
+| `fabric/` | MC 26.3 Fabric 分支：输入、角色、HUD、物品、MC 战斗与健康百分比 / Minecraft client bridge |
+| `protocol/skycraft_protocol.h` | 协议 v12；独立映射 `Local\OnimushaMC_v1` / Versioned shared-memory contract |
+| `onimusha/native/` | Windows x64 REFramework DLL、D3D11-on-12 绘制、通信与验证 / Native plugin and renderer |
+| `onimusha/adapter/` | 鬼武者 Lua 对象绑定和只读场景探针 / Game-specific adapter and diagnostic probe |
+| `onimusha/launcher/` | 隔离 Minecraft 安装及启动脚本 / Isolated launcher scripts |
+| `docs/onimusha-bindings.md` | 本地 TDB 与运行场景绑定证据 / Binding evidence |
+| `docs/README-Skyrim-upstream.md` | 上游 Skyrim 项目的原说明，仅作为来源记录 / Original upstream README |
 
-> **Heavily recommended: [Alternate Start - Live Another Life](https://www.nexusmods.com/skyrimspecialedition/mods/272).**
-> Skyrim's opening (the cart ride and Helgen) is heavily scripted and may not work with SkyCraft,
-> so you can get stuck. Alternate Start skips it and lets you choose where your new character
-> begins. Otherwise, play from a save made after Helgen.
+## 行为 / Behavior
 
-**Minecraft**
+- MC 3C、背包、手持物品和 HUD 通过插件绘制到鬼武者。成功接管后隐藏原玩家绘制；连接、绑定、地形、相机或 GPU 未就绪时保持原游戏可见。
+- MC 输入及 MC 武器伤害通过协议传递。原游戏实际血量仍是权威值：`MC 血量 = clamp(原血量 / 原最大血量, 0, 1) × 20`。例如原游戏 75/100 血量显示为 7.5 颗心。收到尚未结算的原游戏伤害时，由 MC 护甲和盾牌计算，再按最大血量比例回写。
+- 原游戏地形作为 MC 碰撞来源。原地形不能被挖掉；MC 放置的方块可放置和拆除。鬼武者实体方块碰撞需要通过游戏适配器的注册检查。
+- 场景切换使用 epoch 清空旧地形和事件。传送确认、菜单、过场、失焦、MC 断开或禁用时停止接管并释放输入。
 
-You only need **a Microsoft account that owns Minecraft: Java Edition**. SkyCraft comes with
-everything else: a portable [Prism Launcher](https://prismlauncher.org/) set up with Minecraft 26.3,
-[Fabric](https://fabricmc.net/), [Fabric API](https://modrinth.com/mod/fabric-api) and the SkyCraft
-Minecraft mod. Prism downloads Minecraft and Java itself.
+MC character, camera, inventory, held items and HUD are rendered inside the host. Host HP is authoritative and mapped proportionally to ten Minecraft hearts. Original terrain is protected; placed MC blocks can be built and removed. Takeover requires verified game bindings, collision, camera, renderer and teleport acknowledgement. Scene changes and disconnects release control.
 
-Minecraft runs hidden next to Skyrim. Budget about 3 GB of extra RAM, about 1.5 GB of disk for
-Minecraft's own files, and a GPU that runs Minecraft 26.3.
+上述内容是代码设计；实际游戏验证状态见 [验证记录](docs/ONIMUSHA-VALIDATION.md)。不要把独立通信或 GPU 测试当作鬼武者完整玩法测试。
 
-## Installing
+These are implementation goals and code paths. See the [validation record](docs/ONIMUSHA-VALIDATION.md) for the current evidence; IPC and GPU smoke tests do not establish full in-game functionality.
 
-1. **Install `SkyCraft-<version>.zip`** with Mod Organizer 2 or Vortex, like any SKSE plugin.
-2. **Start Skyrim through SKSE.** The first time, SkyCraft unpacks its Minecraft to
-   `%LOCALAPPDATA%\SkyCraft` and a small **Prism Launcher** window asks you to sign in with your
-   Microsoft account. Alt-Tab to it, sign in, then go back to Skyrim. Prism downloads Minecraft,
-   Fabric and Java (a few minutes, first time only), and Skyrim's corner messages tell you when
-   Minecraft is ready.
-3. **After that it's automatic.** Minecraft starts with Skyrim with no window and no sound, opens
-   its SkyCraft world by itself (a new Survival world, created on your PC), and quits when Skyrim
-   closes.
+## 版本与构建 / Versions and build
 
-Updating: install the new SkyCraft zip over the old one. The next start updates the Minecraft side
-too and keeps your sign-in and your world.
+开发环境：Windows x64、Minecraft 26.3、Fabric Loader 0.19.5、Fabric API 0.161.0+26.3、JDK 25、Gradle 9.7.1、Visual Studio 2026。
 
-Uninstalling: remove the mod, then delete `%LOCALAPPDATA%\SkyCraft`. That folder holds Prism, your
-Microsoft sign-in (Prism's), Minecraft's files and your SkyCraft world.
+REFramework 的头文件和 Lua 固定于本机已安装版本对应提交 `b6baf6b406efc65e077b99cb4d9ad25b0a0a9095`。升级框架必须重新检查 ABI 和游戏 TDB 绑定。
 
-### Using your own launcher
+```powershell
+# Run from this repository, with JAVA_HOME pointing to JDK 25.
+cd fabric
+.\gradlew.bat test build
 
-`Data/SKSE/Plugins/SkyCraft.ini` can point SkyCraft at your own Prism, MultiMC or `.bat` file instead:
-
-```ini
-[Minecraft]
-bStartWithSkyrim = 1              ; 0: start Minecraft yourself, any way you like
-sLauncher =                       ; empty: the Minecraft that comes with SkyCraft
-sArguments = --launch SkyCraft    ; what your launcher needs to start the SkyCraft instance
+# Native plugin: Windows x64 Visual Studio toolchain.
+cmake -S onimusha -B build/onimusha -A x64
+cmake --build build/onimusha --config Release
+ctest --test-dir build/onimusha -C Release --output-on-failure
 ```
 
-Your instance needs Minecraft 26.3, Fabric Loader 0.19.5 or newer, Fabric API, Java 25 and
-`skycraft-fabric-<version>.jar` (from the release), plus `-Dskycraft.startHidden=true` in its
-JVM arguments if it should stay hidden from the start. SkyCraft never starts a second Minecraft if
-one with the mod is already running. It starts Minecraft through Windows' shell, so under Mod
-Organizer Minecraft stays outside MO2's virtual file system and doesn't keep MO2 locked.
+Minecraft 正式运行通过隔离 PCL 配置登录。`MC-launch-dev.ps1` 是不读取用户凭据的本地开发测试入口；不提供线上身份验证。MC 安装、资产、登录状态、构建产物和游戏探针快照都不提交到源码库。
 
-## Playing with friends
+Use the isolated PCL profile for normal authenticated play. `MC-launch-dev.ps1` is a local developer test entry point without account credentials or online authentication. Minecraft binaries, assets, credentials, build products and live probe snapshots are excluded from this repository.
 
-Everyone needs their own Skyrim with SkyCraft. Only the Minecraft world is shared: blocks, items,
-mobs and each other. Up to 100 players. Each player keeps their own Skyrim world, NPCs and quests.
+## 控制 / Controls
 
-1. **Host:** press **O** (Minecraft's menu), choose **Open to LAN**, then **Start LAN World**.
-   SkyCraft's bundled [e4mc](https://modrinth.com/mod/e4mc) puts a link like `abc-def.e4mc.link`
-   in chat. Click it to copy it, then send it to your friends.
-2. **Friends:** press **T** and type `/join abc-def.e4mc.link`. Your Minecraft leaves its own
-   world and joins the host's.
-3. **`/leave`** goes back to your own world. If the host closes their world, you're put back in
-   yours automatically.
-
-**With Discord:** your Discord status shows SkyCraft while you play. Once you've opened your world
-to LAN it has a **Join** button (and you can invite friends from a Discord chat). A friend with
-Skyrim and SkyCraft already running clicks it and joins you, no link needed.
-
-## Controls
-
-Minecraft has priority. These keys still go to Skyrim:
-
-| Key | Does |
+| 键 / Key | 行为 / Action |
 |---|---|
-| **G** | Skyrim activate: doors, NPCs (talk), containers, levers, furniture |
-| **Esc** | Skyrim menu (or closes an open Minecraft screen) |
-| **J** / **M** | Skyrim journal / map |
-| **H** | Skyrim wait |
-| **F9** | Skyrim quickload (save from the Esc menu) |
-| **~** | Skyrim console |
-| **O** | Minecraft pause / options menu |
+| F10 | 开启或关闭接管 / Toggle takeover |
+| WASD、空格、Shift | MC 移动、跳跃、潜行 / Movement, jump, crouch |
+| 鼠标、左右键、滚轮 | MC 视角、攻击、放置及物品栏 / Look, attack, place, hotbar |
+| E / F5 / O | MC 背包 / 视角切换 / 菜单 / Inventory / camera mode / menu |
+| Insert | REFramework 界面 / REFramework UI |
+| Escape、G（未打开 MC 界面时） | 保留原游戏菜单与交互通路 / Host menu and interaction pass-through |
 
-Every other key is Minecraft's: **E** inventory, **F5** camera, **T** chat, **/** commands,
-**Shift** crouch/sneak, and so on.
+## 作者与许可 / Credits and license
 
-## Known limitations
+MOD制作：LCPD15/LCPD拉灯
 
-- If something goes wrong, `Documents\My Games\Skyrim Special Edition\SKSE\SkyCraft.log` says what.
-  For bug reports, set `bDiagnostics = 1` in `SkyCraft.ini` for detailed logs.
-- **Stuck on "SkyCraft: starting Minecraft..."?** After a minute SkyCraft says which of these it is:
-  - Prism Launcher is still busy. Alt-Tab to it: it may be downloading, or need you to sign in,
-    or show an error.
-  - Minecraft closed. Its log is
-    `%LOCALAPPDATA%\SkyCraft\Prism\instances\SkyCraft\.minecraft\logs\latest.log`.
-  - Minecraft is running but not responding. Please report it, with `SkyCraft.log` and that
-    `latest.log`.
-
-  You need to own Minecraft: Java Edition.
-
-- Skyrim's opening (cart ride and Helgen) may leave you stuck. Use
-  [Alternate Start](https://www.nexusmods.com/skyrimspecialedition/mods/272) or a save made after Helgen.
-- Skyrim's inventory, magic, shouts and perks can't be opened while Minecraft drives the player.
-- Minecraft hits only reach NPCs, not Skyrim objects such as the web around Arvel in Bleak Falls
-  Barrow. There's no in-game switch back to plain Skyrim yet. Closing Minecraft hands control
-  back to Skyrim; Minecraft keeps what it last autosaved, every few minutes. Deal with the object,
-  then restart Skyrim to bring Minecraft back.
-- Sign text isn't drawn yet.
-- All Skyrim interiors share one Minecraft world, so blocks placed in one interior can appear in
-  another at the same coordinates.
-- Multiplayer syncs only the Minecraft world. Each player has their own Skyrim, and guests
-  can't hit their own Skyrim NPCs yet.
-- Mods that also take over the camera (Improved Camera SE, SmoothCam, True Directional Movement)
-  will conflict.
-
-## Building from source
-
-You need Visual Studio 2026 (C++), CMake 3.25+, Git, and JDK 25.
-
-```bat
-git clone --recursive <this repo> skycraft
-cd skycraft
-git clone https://github.com/microsoft/vcpkg .tools\vcpkg
-.tools\vcpkg\bootstrap-vcpkg.bat
-
-cd skse
-cmake --preset default
-cmake --build --preset release
-
-cd ..\fabric
-gradlew build
-
-cd ..
-powershell -ExecutionPolicy Bypass -File tools\package.ps1 -NoBuild
-```
-
-`tools\package.ps1` builds both halves (drop `-NoBuild`) and writes the release files to `dist\`.
-
-For development:
-
-- `fabric\gradlew runClient` starts a dev Minecraft that stays running when Skyrim closes.
-- With `SKYCRAFT_DEPLOY_DIR` (preset default: the MO2 mod folder `mods\SkyCraft`, if it exists),
-  each plugin build is copied straight into Mod Organizer.
-- `docs\DESIGN.md` explains how the two halves fit together, and `protocol\skycraft_protocol.h`
-  is the shared-memory layout both sides follow.
-
-| Folder | |
-|---|---|
-| `skse/` | The Skyrim SKSE plugin (C++, [CommonLibSSE-NG](https://github.com/alandtse/CommonLibVR/tree/ng)) |
-| `fabric/` | The Minecraft Fabric mod (Java) |
-| `protocol/` | The shared-memory protocol between them |
-| `tools/` | Packaging, test stand-ins (`fake_skyrim.py`, `fake_guest.py`) and diagnostics |
-
-## License
-
-[MIT](LICENSE)
+Original SkyCraft: **chasmlol**. MIT license and upstream copyright are retained in [LICENSE](LICENSE). REFramework headers and vendored Lua retain their original notices. Minecraft and Fabric dependencies are downloaded from their official distribution metadata and are not included in Git source.

@@ -2,6 +2,7 @@ package dev.skycraft.client;
 
 import dev.skycraft.combat.SkyCombat;
 import dev.skycraft.link.Proto;
+import dev.skycraft.link.GuiCursor;
 import dev.skycraft.link.SkyLink;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.PauseScreen;
@@ -18,8 +19,10 @@ public final class InputBridge {
 	private static final boolean[] KEYS = new boolean[512];
 	private static final boolean[] BUTTONS = new boolean[8];
 	private static double cursorX, cursorY;
+	private static final GuiCursor GUI_CURSOR = new GuiCursor();
 	private static int modifiers;
 	private static int clickLogs;
+	private static int cursorLogs;
 
 	private InputBridge() {
 	}
@@ -30,6 +33,22 @@ public final class InputBridge {
 
 	public static void drain(Minecraft minecraft) {
 		SkyLink.drainInput((type, code, a, b, c) -> dispatch(minecraft, type, code, a, b, c));
+		replayGuiCursor(minecraft);
+	}
+
+	private static void replayGuiCursor(Minecraft minecraft) {
+		if (minecraft.gui.screen() == null) {
+			return;
+		}
+		var window = minecraft.getWindow();
+		var point = GUI_CURSOR.logical(window.getScreenWidth(), window.getScreenHeight());
+		if (point == null) {
+			return;
+		}
+		double dx = point.x() - cursorX, dy = point.y() - cursorY;
+		cursorX = point.x();
+		cursorY = point.y();
+		minecraft.mouseHandler.onMove(window.handle(), cursorX, cursorY, dx, dy);
 	}
 
 	private static void dispatch(Minecraft minecraft, int type, int code, int a, int b, int c) {
@@ -37,6 +56,8 @@ public final class InputBridge {
 		switch (type) {
 			case Proto.IN_KEY -> key(minecraft, handle, code, a != 0);
 			case Proto.IN_MOUSE_BUTTON -> {
+				// Opening a GUI recentres vanilla's hidden mouse. Replay before onButton reads it.
+				replayGuiCursor(minecraft);
 				if (code > 0 && code < BUTTONS.length) {
 					BUTTONS[code] = a != 0;
 				}
@@ -45,16 +66,34 @@ public final class InputBridge {
 					dev.skycraft.SkyCraft.LOG.info("SkyCraft: click {} -> {} {} (grabbed {}, screen {})", code, hit == null ? "null" : hit.getType(),
 						hit instanceof net.minecraft.world.phys.EntityHitResult eh ? eh.getEntity().getName().getString() : hit == null ? "" : hit.getLocation(),
 						minecraft.mouseHandler.isMouseGrabbed(), minecraft.gui.screen());
+					if (minecraft.gui.screen() != null) {
+						var window = minecraft.getWindow();
+						dev.skycraft.SkyCraft.LOG.info("OnimushaMC: GUI click at {},{}; logical window {}x{}, GUI {}x{}",
+							minecraft.mouseHandler.getScaledXPos(window), minecraft.mouseHandler.getScaledYPos(window),
+							window.getScreenWidth(), window.getScreenHeight(), window.getGuiScaledWidth(), window.getGuiScaledHeight());
+					}
 				}
 				minecraft.mouseHandler.onButton(handle, new MouseButtonInfo(code, modifiers), a != 0 ? 1 : 0);
 			}
 			case Proto.IN_SCROLL -> minecraft.mouseHandler.onScroll(handle, 0.0, a / 120.0);
 			case Proto.IN_CURSOR -> {
-				double dx = a - cursorX;
-				double dy = b - cursorY;
-				cursorX = a;
-				cursorY = b;
-				minecraft.mouseHandler.onMove(handle, a, b, dx, dy);
+				var host = SkyClient.sky();
+				if (GUI_CURSOR.remember(a, b, host.viewportW, host.viewportH)) {
+					replayGuiCursor(minecraft);
+					if (minecraft.gui.screen() != null && cursorLogs++ < 4) {
+						var window = minecraft.getWindow();
+						dev.skycraft.SkyCraft.LOG.info("OnimushaMC: cursor host {},{} / {}x{} -> logical {},{} / {}x{} (framebuffer {}x{})",
+							a, b, host.viewportW, host.viewportH, cursorX, cursorY,
+							window.getScreenWidth(), window.getScreenHeight(), window.getWidth(), window.getHeight());
+					}
+				}
+			}
+			case Proto.IN_LOOK_DELTA -> {
+				if (minecraft.gui.screen() == null) {
+					cursorX += a;
+					cursorY += b;
+					minecraft.mouseHandler.onMove(handle, cursorX, cursorY, a, b);
+				}
 			}
 			case Proto.IN_TEXT -> {
 				if (minecraft.gui.screen() != null) {
@@ -88,7 +127,13 @@ public final class InputBridge {
 			return;
 		}
 		var uuid = minecraft.player.getUUID();
+		int generation = SkyLink.generation();
+		int epoch = SkyClient.sky().collisionEpoch;
 		server.execute(() -> {
+			if ((flags & Proto.HURT_HOST_UNAPPLIED) != 0
+				&& !dev.skycraft.combat.HostHealth.currentSession(generation, epoch)) {
+				return;
+			}
 			ServerPlayer player = server.getPlayerList().getPlayer(uuid);
 			if (player != null) {
 				SkyCombat.hurtPlayer(player, kind, skyrimDamage, attacker, flags);

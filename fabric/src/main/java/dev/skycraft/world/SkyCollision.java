@@ -48,6 +48,7 @@ public final class SkyCollision {
 	private static volatile java.util.function.Predicate<net.minecraft.world.entity.Entity> smoothCollider = e -> false;
 	private static final Set<Long> KNOWN_REGIONS = ConcurrentHashMap.newKeySet();
 	private static volatile int epoch = -1;
+	private static volatile int sessionGeneration = Integer.MIN_VALUE;
 	private static Thread consumer;
 
 	private SkyCollision() {
@@ -127,6 +128,11 @@ public final class SkyCollision {
 	/** True once Skyrim has sent the region containing this block (even if it was empty). */
 	public static boolean isKnown(int x, int y, int z) {
 		return KNOWN_REGIONS.contains(regionKey(Math.floorDiv(x, REGION_SIZE), Math.floorDiv(y, REGION_SIZE), Math.floorDiv(z, REGION_SIZE)));
+	}
+
+	/** Readiness cannot reuse geometry cached before a native restart or world change. */
+	public static boolean currentSession(int expectedEpoch) {
+		return sessionGeneration == SkyLink.generation() && epoch == expectedEpoch;
 	}
 
 	/** True if any Skyrim geometry exists in the 3x3 column below (x, y, z), down to {@code depth} blocks. */
@@ -227,6 +233,11 @@ public final class SkyCollision {
 		if (s == null) {
 			return false;
 		}
+		int generation = SkyLink.generation();
+		if (sessionGeneration != generation) {
+			clear(-1);
+			sessionGeneration = generation;
+		}
 		long head = SkyLink.collisionHead();
 		long tail = SkyLink.collisionTail();
 		if (tail >= head) {
@@ -234,6 +245,9 @@ public final class SkyCollision {
 		}
 		long data = OFF_COLLISION_RING + CR_DATA;
 		while (tail < head) {
+			if (sessionGeneration != SkyLink.generation()) {
+				return true; // the new host reset its ring; do not publish the old local tail
+			}
 			long pos = tail % CR_DATA_BYTES;
 			int type = s.get(JAVA_INT, data + pos);
 			int payloadBytes = s.get(JAVA_INT, data + pos + 4);

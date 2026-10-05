@@ -8,11 +8,19 @@ public final class Proto {
 	}
 
 	public static final int MAGIC = 0x43594B53;
-	public static final int VERSION = 11;
+	public static final int VERSION = 12;
 	// A second client on the same PC (multiplayer testing) talks to its own stand-in Skyrim:
 	// -Dskycraft.link=Local\SkyCraft_guest (see tools/fake_guest.py).
-	public static final String MAPPING_NAME = System.getProperty("skycraft.link", "Local\\SkyCraft_v1");
-	public static final double UNITS_PER_BLOCK = 70.0;
+	public static final String MAPPING_NAME = System.getProperty("onimusha.link", "Local\\OnimushaMC_v1");
+	public static final double UNITS_PER_BLOCK = calibratedScale();
+	private static double calibratedScale() {
+		try {
+			double value = Double.parseDouble(System.getProperty("onimusha.unitsPerBlock", "1.0"));
+			return Double.isFinite(value) && value > 0 ? value : 1.0;
+		} catch (NumberFormatException e) {
+			return 1.0;
+		}
+	}
 
 	public static final long OFF_HEADER = 0x0;
 	public static final long OFF_SKY_STATE = 0x100;
@@ -40,12 +48,14 @@ public final class Proto {
 	// Input types added in v5
 	public static final int IN_HURT = 7;
 	public static final int IN_OPEN_MENU = 8;
+	public static final int IN_LOOK_DELTA = 9;
 	public static final int HURT_MELEE = 0;
 	public static final int HURT_PROJECTILE = 1;
 	public static final int HURT_MAGIC = 2;
 	public static final int HURT_OTHER = 3;
 	public static final int HURT_BLOCKED_IN_SKYRIM = 1;
 	public static final int HURT_POWER_ATTACK = 2;
+	public static final int HURT_HOST_UNAPPLIED = 1 << 2;
 
 	// Actor table (relative to OFF_ACTOR_TABLE)
 	public static final int MAX_ACTORS = 256;
@@ -69,6 +79,9 @@ public final class Proto {
 	public static final int EV_EXPLOSION = 3;
 	public static final int EV_ARROW_STUCK = 4;
 	public static final int EV_SKILL_USE = 5;
+	public static final int EV_HEALTH_CHANGE = 6;
+	public static final int HEALTH_DAMAGE = 1;
+	public static final int HEALTH_HEAL = 1 << 1;
 	// Skyrim skills (ActorValue) Minecraft reports use of; weapon skills come from EV_HIT_ACTOR.
 	public static final int SKILL_BLOCK = 9;
 	public static final int SKILL_SMITHING = 10;
@@ -144,10 +157,19 @@ public final class Proto {
 	public static final long SS_VIEWPORT_W = 0x34;
 	public static final long SS_VIEWPORT_H = 0x38;
 	public static final long SS_GAME_HOUR = 0x3C;
+	public static final long SS_HEALTH_CURRENT = 0x40;
+	public static final long SS_HEALTH_MAX = 0x44;
+	public static final long SS_HOST_UNITS_PER_BLOCK = 0x48;
+	public static final long SS_HEALTH_REVISION = 0x50;
+	public static final long SKY_STATE_BYTES = 0x58;
 
 	public static final int SKY_IN_GAME = 1;
 	public static final int SKY_MENU_OPEN = 1 << 1;
 	public static final int SKY_LOADING = 1 << 2;
+	public static final int SKY_AUTHORITATIVE_HEALTH = 1 << 3;
+	public static final int SKY_HOST_DEAD = 1 << 4;
+	public static final int SKY_NATIVE_TERRAIN_PROTECTED = 1 << 5;
+	public static final int SKY_MC_LOOK = 1 << 6;
 
 	// McState (relative to OFF_MC_STATE)
 	public static final long MS_SEQ = 0x00;

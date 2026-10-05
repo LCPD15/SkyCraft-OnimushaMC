@@ -15,13 +15,22 @@ import org.slf4j.LoggerFactory;
 
 public final class SkyCraft implements ModInitializer {
 	public static final String MOD_ID = "skycraft";
-	public static final String WORLD_NAME = "SkyCraft";
+	public static final String WORLD_NAME = worldName();
 	public static final Logger LOG = LoggerFactory.getLogger(MOD_ID);
 	private static final String KIT2_TAG = "skycraft_builder_kit";
+
+	private static String worldName() {
+		String name = System.getProperty("onimusha.worldName", "OnimushaMC");
+		if (!name.matches("[A-Za-z0-9_-]{1,80}")) {
+			throw new IllegalArgumentException("onimusha.worldName must be a safe world-folder name");
+		}
+		return name;
+	}
 
 	@Override
 	public void onInitialize() {
 		SkyCombat.init();
+		dev.skycraft.combat.HostHealth.init();
 		dev.skycraft.net.SkyNet.init();
 		dev.skycraft.world.SkyDig.init();
 		ServerLifecycleEvents.SERVER_STARTED.register(SkyCraft::configureServer);
@@ -44,7 +53,9 @@ public final class SkyCraft implements ModInitializer {
 		rules.set(GameRules.SPAWN_WANDERING_TRADERS, false, server);
 		rules.set(GameRules.PLAYER_MOVEMENT_CHECK, false, server);
 		rules.set(GameRules.KEEP_INVENTORY, true, server);
-		rules.set(GameRules.IMMEDIATE_RESPAWN, true, server);
+		rules.set(GameRules.IMMEDIATE_RESPAWN, false, server);
+		// Native HP is authoritative. Hunger must never refill the native game's health.
+		rules.set(GameRules.NATURAL_HEALTH_REGENERATION, false, server);
 		rules.set(GameRules.SHOW_ADVANCEMENT_MESSAGES, false, server);
 		server.getCommands().performPrefixedCommand(server.createCommandSourceStack().withSuppressedOutput(), "time set noon");
 		LOG.info("SkyCraft: mirror world configured");

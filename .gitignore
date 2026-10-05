@@ -18,3 +18,11 @@ CMakeUserPresets.json
 fabric/run-guest*/
 __pycache__/
 *.pyc
+onimusha/build/
+onimusha/runtime/
+onimusha/config/*local*.json
+*.pid
+launch-dev.args
+onimusha_mc_probe*.json
+onimusha/tools/UnitBoxCollider/bin/
+onimusha/tools/UnitBoxCollider/obj/

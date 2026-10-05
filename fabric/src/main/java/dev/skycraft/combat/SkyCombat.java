@@ -186,6 +186,11 @@ public final class SkyCombat {
 	 * {@code skyrimDamage} is what Skyrim would have taken off the player's health.
 	 */
 	public static void hurtPlayer(ServerPlayer player, int kind, float skyrimDamage, int attackerFormId, int flags) {
+		boolean nativeHealth = HostHealth.mirrored(player);
+		if (nativeHealth && (flags & Proto.HURT_HOST_UNAPPLIED) == 0) {
+			// Host damage already reduced native HP, which the snapshot mirrors. Do not apply twice.
+			return;
+		}
 		if (!player.isAlive() || skyrimDamage <= 0.0F) {
 			return;
 		}
@@ -201,11 +206,14 @@ public final class SkyCombat {
 			case Proto.HURT_MAGIC -> attacker != null ? sources.indirectMagic(attacker, attacker) : sources.magic();
 			default -> sources.generic();
 		};
-		float damage = skyrimDamage / SKYRIM_TO_MC_DAMAGE;
+		// v12 unapplied host hits already contain MC points; never use Skyrim's fixed /5 rule.
+		float damage = nativeHealth ? skyrimDamage : skyrimDamage / SKYRIM_TO_MC_DAMAGE;
 		float healthBefore = player.getHealth();
 		boolean blocking = player.isBlocking();
 		boolean hurt = player.hurtServer(level, source, damage);
-		trainDefence(player, damage, blocking && player.getHealth() >= healthBefore - 1.0E-3F);
+		if (!nativeHealth) {
+			trainDefence(player, damage, blocking && player.getHealth() >= healthBefore - 1.0E-3F);
+		}
 		SkyCraft.LOG.info("SkyCraft: Skyrim hit the player for {} ({} Minecraft): health {} -> {}{}", skyrimDamage, damage, healthBefore, player.getHealth(),
 			hurt ? "" : " (blocked/immune)");
 		if (hurt && attacker != null && (flags & Proto.HURT_POWER_ATTACK) != 0 && !player.isBlocking()) {
