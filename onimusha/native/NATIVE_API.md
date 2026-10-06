@@ -10,6 +10,12 @@ which links its own matching static Lua library to operate on the callback state
 All positions are MC coordinates in blocks, Y up. The adapter owns conversion
 from RE metres and must prove its player/control/camera/hide/collision/HP bindings
 before submitting `ready=true`. A missing binding must stay in diagnostic mode.
+RE XYZ and MC XYZ use the same axis directions; conversion applies scale and
+world-origin tiling without mirroring Z. Fallback world rendering uses right-handed
+view/projection matrices with MC right `(-cos(yaw),0,-sin(yaw))` mapping to screen
+right. The MC yaw/pitch up vector keeps vertical-pole views finite. F5 front view
+reverses the viewing direction and its screen-right basis. Supplied matrices and
+HUD rendering keep their existing layout. Terrain and avatar remain CullNone.
 
 * `submit_host(table)` (`tick_host` alias) publishes `x,y,z,yaw,pitch,world_id,epoch,
   teleport_seq,viewport_w,viewport_h,health_current,health_max,health_revision,
@@ -30,9 +36,26 @@ before submitting `ready=true`. A missing binding must stay in diagnostic mode.
   queuing succeeds. Do not forward again while committing returned HP.
 * `set_enabled(bool)` controls takeover (default false). F10 toggles it.
 * `status()` returns `connected,enabled,ready,host_ready,collision_ready,
+  not_ready_reason,host_age_ms,mc_heartbeat_age_ms,re_ui_open,re_ui_sampled,
   camera_ready,renderer_ready,gui_cursor_known,gui_cursor_u,gui_cursor_v,
+  gui_cursor_raw,raw_look,gui_raw_packets,gui_raw_dx,gui_raw_dy,
+  gui_fallback_packets,gui_open_count,look_raw_packets,
   protocol,rejected,render_invalid,sections,textures,overlay_frame,
   error,mapping`.
+  Mouse counters accumulate for the DLL lifetime, without per-frame logging.
+  GUI RAW packet counts/delta sums prove whether genuine relative input reached
+  the bridge; fallback counts include emitted movement only, not center warps.
+  `not_ready_reason` reports the first failed existing takeover gate, in its
+  original order, or `ready`. UI state is queried only when prior gates pass;
+  `re_ui_sampled=false` means `re_ui_open` is the last permitted sample, not a
+  newly queried UI value. Missing/future heartbeat or host timestamp has age -1.
+  Collision telemetry includes `mc_pid,collision_epoch,collision_generation,
+  collision_publish_seq,collision_consumed_seq,collision_batch_end,
+  collision_head,collision_tail,collision_ring_valid,collision_pack_ms,
+  collision_pack_max_ms,collision_pack_failures,collision_queue_failures,
+  collision_failure`. Generations/sequences/byte counters are exact Lua integers.
+  Pack time covers synchronous packing, not the whole Lua query or render frame;
+  packing and queue failures are separate cumulative counters.
 * `publish_actors(array)` rows: `id,flags,x,y,z,yaw,width,height,health_frac,level,name`.
   Stable nonzero IDs must map back to the host's live enemies. Maximum 256 rows.
 * `publish_collision_tris({epoch,min_x,min_y,min_z,max_x,max_y,max_z,triangles})`
@@ -46,6 +69,27 @@ before submitting `ready=true`. A missing binding must stay in diagnostic mode.
   rejects more than 1024 cells or 12 million voxel overlap checks in one update.
   Bounds must be finite, ordered, and within +/-30,000,000 blocks; validation
   happens before floating-point-to-integer conversion or region arithmetic.
+  Packing finishes before queue capacity is checked for the whole batch,
+  including a new-epoch CLEAR and wrap padding. Failure publishes no packet and
+  does not advance the successful epoch/sequence. Success copies every packet
+  and commits the producer head once; protocol v12 is unchanged.
+  A successful return proves complete queue publication, not client consumption.
+  Save `collision_publish_seq` plus generation/PID/epoch after success, and wait
+  for connected + matching context + `collision_consumed_seq>=target` before
+  certifying the new complete coverage. The consumer tail is committed after
+  processing its head snapshot, so crossing the batch end proves drain completion.
+  It does not prove a subsequent game physics tick ran. Invalid ring counters
+  cannot acknowledge a batch and revoke native collision readiness.
+  Sequences increase over the DLL lifetime; observed MC PID/fresh-stale link
+  changes, host epoch/Lua reset and native mapping reopen advance generation and
+  discard old pending proofs without recycling sequence IDs. A new DLL lifetime
+  starts new counters; adapter state must not reuse old session proofs.
+  Each packet replaces its full aligned eight-block region, including query-edge
+  padding. Native does not merge old triangles into MC region packets. While
+  waiting for acknowledgement, Lua may retain only same-context old/new complete
+  query intersection covering the player's feet/body; different epoch/generation,
+  disconnect, or leaving coverage must release control. All refreshed query parts
+  must be complete; triangle count truncation must not certify a whole AABB.
 * `drain_solids()` returns up to 8192 block changes `{x,y,z,solid}` per call. The
   adapter creates/removes RE collision objects and must retain them until removed.
 * `set_camera({view_proj,origin_x,origin_y,origin_z,valid,binding_ready})`. The optional
@@ -63,17 +107,42 @@ Insert remains REFramework. Mouse deltas use MC sensitivity and inversion.
 The window-cursor fallback suppresses host recentering (within one pixel of the
 client center) while updating its baseline; fresh routing, focus loss and MC menu
 transitions reset that baseline. Native relative raw input remains preferred.
+GUI screens use a virtual cursor, initialized at the center when a screen opens
+or routing resumes after focus loss. Existing relative RAW mouse packets add
+`dx/client_width,dy/client_height` to normalized coordinates, clamped to [0,1].
+The bridge does not register a RAW input device or change the game's mouse setup.
+Every GUI button sends the cached virtual cursor before the button event; button
+LPARAM and the OS cursor cannot move this cache. Returning the virtual cursor to
+the center through relative movement permits an actual center click.
+Before the first relative RAW packet, legacy WM_MOUSEMOVE can supply relative
+deltas using a center baseline and suppressing host recentering. Once RAW arrives,
+legacy movement is ignored until routing/focus/menu transition resets its mode,
+preventing duplicate movement. The same reset clears the non-GUI RAW look flag so
+historical RAW input cannot permanently disable a later fallback session.
+GUI-to-GUI updates and client/host viewport resizing preserve normalized cursor
+position; leaving GUI or losing routing clears it. Pending center/cache packets
+are retried. If a button's cursor or button itself cannot queue, routing resets
+and pending ReleaseAll is retried before the next GUI center baseline; this avoids
+leaving a held button after losing its button-up event to a full ring.
+Both Present and window-message paths retry pending ReleaseAll before forwarding
+new input. If the ring remains full, routed MC input is consumed without a new
+GUI baseline; focus/F10 handling, Insert, non-GUI Escape/G and unrelated window
+messages retain their existing behavior. Recovery does not depend on Present
+arriving before the next button message.
+The renderer uses this normalized cache rather than polling the OS cursor.
 The pinned REFramework WindowsMessageHook invokes DefWindowProc for consumed
 messages. The plugin returns false for routed WM_INPUT and never performs a
 second system cleanup itself; the actual DLL test fixture mirrors that wrapper.
 
-Actual in-game GUI acceptance remains unresolved: an absolute move at the intended
-inventory slot was followed by a center-coordinate button event. Native capture
-can recenter between movement and button generation. Reusing the old position for
-every center click would lose genuine center clicks, so no such heuristic is added.
-A verified host cursor-lock release binding or a virtual GUI cursor driven by
-real relative input requires further evidence and real mouse testing. Synthetic
-DLL callback tests validate given coordinates, not the game's input provenance.
+Actual in-game GUI acceptance still requires a real relative mouse test of this
+virtual-cursor build. The earlier absolute-event build selected the wrong slot
+after the host replaced its button coordinates with the center. Automated DLL
+callback tests cover virtual-cache ordering and transitions; pure router tests
+cover RAW accumulation/clamping/deduplication. They do not manufacture a genuine
+OS HRAWINPUT packet, prove the game supplies one, or verify physical GUI clicks.
+Absolute desktop automation may use the legacy fallback and cannot establish
+physical relative-input acceptance. Use status packet/delta counters to distinguish
+missing relative input from GUI position/Java scaling failures.
 
 The renderer reads native-managed meshes, textures, avatar/scene, collider triangles
 and a deep copy of the triple-buffer HUD. Invalid ring packets, NaN movement,

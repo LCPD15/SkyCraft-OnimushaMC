@@ -29,6 +29,7 @@ public final class SkyCraft implements ModInitializer {
 
 	@Override
 	public void onInitialize() {
+		dev.skycraft.combat.OnimushaSwordGuard.init();
 		SkyCombat.init();
 		dev.skycraft.combat.HostHealth.init();
 		dev.skycraft.net.SkyNet.init();

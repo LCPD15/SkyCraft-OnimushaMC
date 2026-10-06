@@ -38,6 +38,11 @@ if ($ProbeOnly) {
             if ($taskOldPreference) { $taskPreference.Value = $taskOldPreference.Value }
         }
     }
+    # Identity XYZ basis: the tested native camera looks along local -Z.
+    # Old reflection-basis angle tuning must not survive the coordinate migration.
+    $taskSafeConfig.camera_yaw_sign = -1.0
+    $taskSafeConfig.camera_yaw_offset = 180.0
+    $taskSafeConfig.camera_pitch_sign = -1.0
     $taskSafeConfigPath = Join-Path $ProjectRoot 'runtime\installation-config.json'
     New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($taskSafeConfigPath)) -Force | Out-Null
     $taskSafeConfig | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $taskSafeConfigPath -Encoding UTF8

@@ -13,7 +13,6 @@ import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRe
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
-import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
@@ -57,6 +56,8 @@ public final class SkyCombat {
 
 	private static final Map<Integer, SkyrimActorEntity> PROXIES = new HashMap<>();
 	private static final List<SkyLink.Actor> ACTORS = new ArrayList<>();
+	private static final ActorProxyIdentity.Boundary SESSION_BOUNDARY = new ActorProxyIdentity.Boundary();
+	private static final SkyLink.SkyState HOST = new SkyLink.SkyState();
 
 	private SkyCombat() {
 	}
@@ -74,14 +75,31 @@ public final class SkyCombat {
 		List<ServerPlayer> players = server.getPlayerList().getPlayers();
 		if (!SkyLink.active() || players.isEmpty()) {
 			removeAll();
+			SESSION_BOUNDARY.invalidate();
 			return;
+		}
+		int generation = SkyLink.generation();
+		if (!SkyLink.readSkyState(HOST) || generation != SkyLink.generation()) {
+			removeAll();
+			SESSION_BOUNDARY.invalidate();
+			return;
+		}
+		var session = new ActorProxyIdentity.Session(generation, HOST.collisionEpoch);
+		if (SESSION_BOUNDARY.observe(session)) {
+			removeAll();
 		}
 		ServerLevel level = players.getFirst().level();
 		for (ServerPlayer player : players) {
 			pickUpNearby(player);
 		}
-		if (SkyLink.readActors(ACTORS)) {
-			sync(level);
+		boolean actorsRead = SkyLink.readActors(ACTORS);
+		if (!SkyLink.readSkyState(HOST) || !session.matches(SkyLink.generation(), HOST.collisionEpoch)) {
+			removeAll();
+			SESSION_BOUNDARY.invalidate();
+			return;
+		}
+		if (actorsRead) {
+			sync(level, session);
 		}
 		// Hits land during the tick (melee, sweeps, arrows, fire); send one combined hit per actor.
 		for (SkyrimActorEntity proxy : PROXIES.values()) {
@@ -95,7 +113,7 @@ public final class SkyCombat {
 		}
 	}
 
-	private static void sync(ServerLevel level) {
+	private static void sync(ServerLevel level, ActorProxyIdentity.Session session) {
 		Map<Integer, SkyLink.Actor> live = new HashMap<>();
 		for (SkyLink.Actor a : ACTORS) {
 			if (!a.dead()) {
@@ -116,17 +134,17 @@ public final class SkyCombat {
 			if (proxy == null) {
 				proxy = new SkyrimActorEntity(SKYRIM_ACTOR, level);
 				proxy.setFormId(a.formId());
+				proxy.setHostSession(session);
 				proxy.setSize(a.width(), a.height());
 				proxy.snapTo(a.x(), a.y(), a.z(), a.yaw(), 0.0F);
-				if (!a.name().isEmpty()) {
-					proxy.setCustomName(Component.literal(a.name()));
-				}
+				proxy.refreshHostName(a.name());
 				if (!level.addFreshEntity(proxy)) {
 					continue;
 				}
 				PROXIES.put(a.formId(), proxy);
 				continue;
 			}
+			proxy.refreshHostName(a.name());
 			proxy.setSize(a.width(), a.height());
 			proxy.setPos(a.x(), a.y(), a.z());
 			proxy.setYRot(a.yaw());
@@ -210,12 +228,20 @@ public final class SkyCombat {
 		float damage = nativeHealth ? skyrimDamage : skyrimDamage / SKYRIM_TO_MC_DAMAGE;
 		float healthBefore = player.getHealth();
 		boolean blocking = player.isBlocking();
-		boolean hurt = player.hurtServer(level, source, damage);
+		boolean observeNativeHit = nativeHealth && HostHealth.canObserveNativeHit(player);
+		boolean hurt;
+		try (var guard = GuardObservation.capture(player, observeNativeHit)) {
+			hurt = player.hurtServer(level, source, damage);
+			if (observeNativeHit) {
+				SkyCraft.LOG.info("OnimushaMC: native hurt attacker={} kind={} incoming={} blocking={} blocked={} vanillaFeedback={} hurt={} blockingCalls={}",
+					attackerFormId, kind, damage, blocking, guard.blocked(), guard.vanillaFeedback(), hurt, guard.blockingCalls());
+			}
+		}
 		if (!nativeHealth) {
 			trainDefence(player, damage, blocking && player.getHealth() >= healthBefore - 1.0E-3F);
 		}
 		SkyCraft.LOG.info("SkyCraft: Skyrim hit the player for {} ({} Minecraft): health {} -> {}{}", skyrimDamage, damage, healthBefore, player.getHealth(),
-			hurt ? "" : " (blocked/immune)");
+			hurt ? "" : " (hurtServer returned false)");
 		if (hurt && attacker != null && (flags & Proto.HURT_POWER_ATTACK) != 0 && !player.isBlocking()) {
 			// Power attacks shove harder, like a sprint hit does in Minecraft.
 			player.knockback(0.5, attacker.getX() - player.getX(), attacker.getZ() - player.getZ(), source, damage);

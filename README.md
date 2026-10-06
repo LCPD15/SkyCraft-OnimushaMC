@@ -25,11 +25,13 @@ This fork connects SkyCraft's Minecraft Fabric client, shared-memory protocol, b
 - MC 3C、背包、手持物品和 HUD 通过插件绘制到鬼武者。成功接管后隐藏原玩家绘制；连接、绑定、地形、相机或 GPU 未就绪时保持原游戏可见。
 - MC 输入及 MC 武器伤害通过协议传递。原游戏实际血量仍是权威值：`MC 血量 = clamp(原血量 / 原最大血量, 0, 1) × 20`。例如原游戏 75/100 血量显示为 7.5 颗心。收到尚未结算的原游戏伤害时，由 MC 护甲和盾牌计算，再按最大血量比例回写。
 - 原游戏地形作为 MC 碰撞来源。原地形不能被挖掉；MC 放置的方块可放置和拆除。鬼武者实体方块碰撞需要通过游戏适配器的注册检查。
-- 场景切换使用 epoch 清空旧地形和事件。传送确认、菜单、过场、失焦、MC 断开或禁用时停止接管并释放输入。
+- 场景切换使用 epoch 清空旧地形和事件。传送确认、菜单、过场、MC 断开或禁用时停止接管；失焦时释放 MC 输入。
 
 MC character, camera, inventory, held items and HUD are rendered inside the host. Host HP is authoritative and mapped proportionally to ten Minecraft hearts. Original terrain is protected; placed MC blocks can be built and removed. Takeover requires verified game bindings, collision, camera, renderer and teleport acknowledgement. Scene changes and disconnects release control.
 
 上述内容是代码设计；实际游戏验证状态见 [验证记录](docs/ONIMUSHA-VALIDATION.md)。不要把独立通信或 GPU 测试当作鬼武者完整玩法测试。
+
+2026-10-07：MC 对敌伤害倍率从10改为100，即之前的十倍，玩家受伤／治疗百分比不变。相机时序修正与额外候选的实测边界见[停点记录](docs/ONIMUSHA-RESUME.md)。光照、遮挡、碰撞、寻路、伤害平衡、处决与格挡的证据和实施路线集中在[研究入口](docs/ONIMUSHA-OVERNIGHT-RESEARCH.md)；这些原生机制尚未全部实现。
 
 These are implementation goals and code paths. See the [validation record](docs/ONIMUSHA-VALIDATION.md) for the current evidence; IPC and GPU smoke tests do not establish full in-game functionality.
 

@@ -5,6 +5,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <chrono>
+#include <limits>
+#include <new>
 
 namespace omc {
 namespace {
@@ -63,12 +66,13 @@ bool Bridge::open(std::wstring_view mappingName){
     std::memset(base_+proto::kOffWorldEntities,0,sizeof(proto::WorldEntities));
     auto* water=reinterpret_cast<proto::WaterGrid*>(base_+proto::kOffWaterGrid);std::memset(water,0,sizeof(*water));std::fill(std::begin(water->surface),std::end(water->surface),proto::kNoWater);
     h->version=proto::kVersion;h->skyrimPid=GetCurrentProcessId();h->mcPid=0;h->skyrimHeartbeatMs=GetTickCount64();h->mcHeartbeatMs=0;
+    observedMcPid_=0;observedConnected_=false;overlayFront_=2;invalidate_collision();
     atom(h->magic).store(proto::kMagic,std::memory_order_release);return true;
 }
 void Bridge::close(){
     // Preserve the last host PID: Fabric's quit watchdog uses ProcessHandle.isAlive(pid).
     // Clearing it to zero would skip that watchdog and leave a hidden MC process running.
-    if(base_){auto* h=reinterpret_cast<proto::Header*>(base_);atom(h->skyrimHeartbeatMs).store(0,std::memory_order_release);UnmapViewOfFile(base_);base_=nullptr;}
+    if(base_){auto* h=reinterpret_cast<proto::Header*>(base_);atom(h->skyrimHeartbeatMs).store(0,std::memory_order_release);UnmapViewOfFile(base_);base_=nullptr;invalidate_collision();observedMcPid_=0;observedConnected_=false;}
     if(mapping_){CloseHandle(mapping_);mapping_=nullptr;}
 }
 bool Bridge::alive() const {
@@ -77,7 +81,7 @@ bool Bridge::alive() const {
     const auto beat=atom(h->mcHeartbeatMs).load(std::memory_order_acquire),now=GetTickCount64();
     return beat&&beat<=now&&now-beat<3000&&atom(h->mcPid).load(std::memory_order_acquire)!=0;
 }
-void Bridge::heartbeat(){if(base_)atom(reinterpret_cast<proto::Header*>(base_)->skyrimHeartbeatMs).store(GetTickCount64(),std::memory_order_release);}
+void Bridge::heartbeat(){if(base_)atom(reinterpret_cast<proto::Header*>(base_)->skyrimHeartbeatMs).store(GetTickCount64(),std::memory_order_release);refresh_collision_link();}
 bool Bridge::publish_host(const proto::SkyState& s){
     if(!base_||!std::isfinite(s.posX)||!std::isfinite(s.posY)||!std::isfinite(s.posZ)||!std::isfinite(s.yaw)||!std::isfinite(s.pitch))return false;
     if((s.flags&proto::kSkyAuthoritativeHealth)&&(!std::isfinite(s.healthCurrent)||!std::isfinite(s.healthMax)||s.healthMax<=0||s.healthCurrent<0))return false;
@@ -93,23 +97,57 @@ bool Bridge::input(std::uint16_t type,std::uint16_t code,std::int32_t a,std::int
 bool Bridge::publish_actors(std::span<const proto::ActorRecord> actors){
     if(!base_||actors.size()>proto::kMaxActors)return false;proto::ActorTable t{};t.count=std::uint32_t(actors.size());std::copy(actors.begin(),actors.end(),std::begin(t.actors));write_seq(base_,proto::kOffActorTable,t);return true;
 }
-bool Bridge::collision_message(std::uint32_t type,const void* p,std::uint32_t bytes){
-    auto* ring=base_+proto::kOffCollisionRing;auto& hr=*reinterpret_cast<std::uint64_t*>(ring);auto& tr=*reinterpret_cast<std::uint64_t*>(ring+proto::kColRingTailOff);
-    const auto head=atom(hr).load(std::memory_order_relaxed),tail=atom(tr).load(std::memory_order_acquire);const auto size=proto::kColRingDataBytes;
-    const auto msg=(std::uint64_t(sizeof(proto::ColMsgHeader))+bytes+7)&~7ull,pos=head%size,pad=pos+msg>size?size-pos:0;
-    if(msg>size/2||tail>head||head-tail>size||msg+pad>size-(head-tail)){++rejected;return false;}
-    auto* data=ring+proto::kColRingDataOff;
-    if(pad)*reinterpret_cast<proto::ColMsgHeader*>(data+pos)={proto::kColPad,0};
-    auto* dst=data+(pad?0:pos);*reinterpret_cast<proto::ColMsgHeader*>(dst)={type,bytes};if(bytes)std::memcpy(dst+sizeof(proto::ColMsgHeader),p,bytes);
-    atom(hr).store(head+pad+msg,std::memory_order_release);return true;
+void Bridge::invalidate_collision(){++collisionGeneration_;collisionBatches_.clear();collisionBatchEnd_=0;lastEpoch_=~0u;}
+void Bridge::refresh_collision_link(){
+    const auto pid=base_?atom(reinterpret_cast<proto::Header*>(base_)->mcPid).load(std::memory_order_acquire):0;
+    const bool connected=alive();if(pid!=observedMcPid_||connected!=observedConnected_){invalidate_collision();observedMcPid_=pid;observedConnected_=connected;}
+}
+CollisionStatus Bridge::collision_status(){
+    refresh_collision_link();CollisionStatus out{};out.generation=collisionGeneration_;out.publishSeq=collisionPublishSeq_;out.consumedSeq=collisionConsumedSeq_;out.batchEnd=collisionBatchEnd_;out.mcPid=observedMcPid_;out.connected=observedConnected_;
+    if(!base_)return out;auto* header=reinterpret_cast<proto::Header*>(base_);const auto beat=atom(header->mcHeartbeatMs).load(std::memory_order_acquire),now=GetTickCount64();out.heartbeatAgeMs=beat&&beat<=now?double(now-beat):-1;
+    auto* ring=base_+proto::kOffCollisionRing;out.head=atom(*reinterpret_cast<std::uint64_t*>(ring)).load(std::memory_order_acquire);out.tail=atom(*reinterpret_cast<std::uint64_t*>(ring+proto::kColRingTailOff)).load(std::memory_order_acquire);
+    out.ringValid=out.tail<=out.head&&out.head-out.tail<=proto::kColRingDataBytes;
+    if(out.ringValid)while(!collisionBatches_.empty()&&collisionBatches_.front().end<=out.tail){collisionConsumedSeq_=collisionBatches_.front().seq;collisionBatches_.pop_front();}
+    out.consumedSeq=collisionConsumedSeq_;return out;
 }
 bool Bridge::publish_collision(std::uint32_t epoch,const proto::ColRegion& region,std::span<const proto::ColTri> triangles){
-    if(!base_||triangles.size()>100000)return false;
-    if(lastEpoch_!=epoch){if(!collision_message(proto::kColClear,&epoch,sizeof(epoch)))return false;lastEpoch_=epoch;}
-    proto::ColRegion h=region;h.epoch=epoch;std::vector<CollisionPacket> packets;
-    if(!pack_collision(h,triangles,packets,error)){++rejected;return false;}
-    for(const auto& p:packets)if(!collision_message(p.type,p.payload.data(),std::uint32_t(p.payload.size())))return false;
-    return true;
+    const auto fail=[&](std::string reason,bool packing){++rejected;if(packing)++collisionPackFailures;else ++collisionQueueFailures;collisionFailure=error=std::move(reason);return false;};
+    if(!base_||triangles.size()>100000)return fail("Collision mapping unavailable or triangle count exceeds limit",true);
+    (void)collision_status();proto::ColRegion h=region;h.epoch=epoch;std::vector<CollisionPacket> packets;std::string packingError;
+    const auto start=std::chrono::steady_clock::now();bool packed{};
+    try{packed=pack_collision(h,triangles,packets,packingError);}catch(const std::bad_alloc&){packingError="Collision packing allocation failed";}
+    collisionPackMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();collisionPackMaxMs=std::max(collisionPackMaxMs,collisionPackMs);
+    if(!packed)return fail(std::move(packingError),true);
+    // Nothing, including COL_CLEAR, becomes visible until the entire batch fits.
+    // Recheck the observed link after synchronous packing before choosing CLEAR.
+    (void)collision_status();
+    try{if(lastEpoch_!=epoch){CollisionPacket clear{proto::kColClear,{}};clear.payload.resize(sizeof(epoch));std::memcpy(clear.payload.data(),&epoch,sizeof(epoch));packets.insert(packets.begin(),std::move(clear));}}
+    catch(const std::bad_alloc&){return fail("Collision batch allocation failed",false);}
+    auto* ring=base_+proto::kOffCollisionRing;auto& hr=*reinterpret_cast<std::uint64_t*>(ring);auto& tr=*reinterpret_cast<std::uint64_t*>(ring+proto::kColRingTailOff);
+    const auto head=atom(hr).load(std::memory_order_relaxed),tail=atom(tr).load(std::memory_order_acquire);constexpr auto size=proto::kColRingDataBytes;
+    if(tail>head||head-tail>size)return fail("Collision ring counters are invalid",false);
+    std::uint64_t end=head;
+    for(const auto& p:packets){
+        const auto msg=(std::uint64_t(sizeof(proto::ColMsgHeader))+p.payload.size()+7)&~7ull,pos=end%size,pad=pos+msg>size?size-pos:0;
+        if(p.payload.size()>std::numeric_limits<std::uint32_t>::max()||msg>size/2||end>std::numeric_limits<std::uint64_t>::max()-pad-msg)return fail("Collision batch packet/counter exceeds bounded ring size",false);
+        end+=pad+msg;
+    }
+    if(end-head>size-(head-tail))return fail("Collision batch needs "+std::to_string(end-head)+" bytes; free "+std::to_string(size-(head-tail)),false);
+    if(collisionBatches_.size()>=4096||collisionPublishSeq_>=std::uint64_t(std::numeric_limits<std::int64_t>::max()))return fail("Collision batch acknowledgement queue is full",false);
+    const auto next=collisionPublishSeq_+1;
+    try{collisionBatches_.push_back({next,end});}catch(const std::bad_alloc&){return fail("Collision acknowledgement allocation failed",false);}
+    auto* data=ring+proto::kColRingDataOff;std::uint64_t cursor=head;
+    for(const auto& p:packets){
+        const auto msg=(std::uint64_t(sizeof(proto::ColMsgHeader))+p.payload.size()+7)&~7ull,pos=cursor%size,pad=pos+msg>size?size-pos:0;
+        if(pad)*reinterpret_cast<proto::ColMsgHeader*>(data+pos)={proto::kColPad,0};
+        auto* dst=data+(pad?0:pos);*reinterpret_cast<proto::ColMsgHeader*>(dst)={p.type,std::uint32_t(p.payload.size())};
+        if(!p.payload.empty())std::memcpy(dst+sizeof(proto::ColMsgHeader),p.payload.data(),p.payload.size());
+        const auto padding=msg-sizeof(proto::ColMsgHeader)-p.payload.size();if(padding)std::memset(dst+sizeof(proto::ColMsgHeader)+p.payload.size(),0,padding);
+        cursor+=pad+msg;
+    }
+    lastEpoch_=epoch;collisionPublishSeq_=next;collisionBatchEnd_=end;collisionFailure.clear();error.clear();
+    // The only head commit. Acquire readers see either the old head or all packets.
+    atom(hr).store(end,std::memory_order_release);return true;
 }
 std::vector<proto::McEvent> Bridge::events(){
     std::vector<proto::McEvent> out;if(!base_)return out;auto* ring=base_+proto::kOffEventRing;auto& hr=*reinterpret_cast<std::uint64_t*>(ring);auto& tr=*reinterpret_cast<std::uint64_t*>(ring+proto::kEventRingTailOff);

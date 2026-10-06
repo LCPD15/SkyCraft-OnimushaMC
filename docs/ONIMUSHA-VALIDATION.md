@@ -1,6 +1,10 @@
 # 鬼武者适配验证 / Onimusha validation
 
-当前处于开发和场景接入阶段。更新时间：2026-10-06。本记录只覆盖 OnimushaWotS 的本地版本，不覆盖其他 RE 游戏。
+当前处于开发和场景接入阶段。更新时间：2026-10-07。本记录只覆盖 OnimushaWotS 的本地版本，不覆盖其他 RE 游戏。
+
+最新用户实测：原游戏敌人攻击能正确扣减MC血量，MC恢复道具能同步恢复双方血量。用户重新确认MC剑击可以扣敌人血，之前因原生世界空间UI冻结、血条没有显示/更新而误判；原生受击反馈仍缺失。9164恢复血条显示与位置移动跟随，但转视角仍不更新；B274被动时序记录定位到原生相机lateUpdate结束时的覆写，候选修正及失败回滚离线验证后仍需实际UI复测。伤害倍率10→100已修改，游戏内平衡待测。方块站立只证明MC玩家碰撞，原生NPC碰撞、真实深度、光照尚未接入。当前绘制层用附近原生碰撞几何重建私有深度，不能代表RE主场景。用户今晚休息，不要求人工操作；下文早期“待验证”为历史状态，以文末表和停点记录为准。
+
+Latest physical report: native damage and MC healing synchronize both pools; sword damage is confirmed, with native hit reactions missing. Lua9164 restored bar visibility and movement tracking, while turning still fails. Passive B274 timing identified the native lateUpdate overwrite; the replay/rollback candidate still needs live UI validation. Enemy scaling10→100 is changed, with balance testing pending. MC-player block support does not establish native NPC collision, actual RE depth or lighting. The user is asleep; manual tests are deferred. Earlier entries are historical; use the final table and resume checkpoint.
 
 2026-10-06 场景加载期间出现一次游戏本体空指针崩溃。当时 MC 未连接、接管未开启、GPU 绘制未初始化；同时启用了新增原生碰撞对象测试，具体根因尚未确认。停用 DLL 和这些测试，仅保留严格只读 Lua 后，用户确认可以正常进入场景。当前默认配置为只读阶段 A，新增原生 Collider/RCOL 创建及零伤害钩子测试均关闭。
 
@@ -24,6 +28,38 @@ Inventory clicking remains unresolved: the native input stream changed the corre
 
 The saved checkpoint additionally retains failed restoration records and delegates WM_INPUT cleanup to the verified REFramework message wrapper. Regression tests passed; these post-run changes still need a live retest. See [resume notes](ONIMUSHA-RESUME.md) before continuing.
 
+2026-10-06 下午由用户接手实测。先确认停点 DLL `E5A0F1…` 的阶段 A 正常加载；随后正常退出，安装 DLL `2B64F161513771E75173889EFCD32F19527BCCCA4729A83A44BE87DF9379CF07` 与 Lua `D2330D4711E605D65AC5DEBAE69A06991744CB7385897EA2CA89B36ED147B32C`。阶段 C 保持默认接管关闭，所有新增原生碰撞对象及伤害测试仍停用；用户确认正常进场景，导出 9,822 三角形后连接同一 JAR。按 F10/E 后，用户确认背包左侧第一格及另一中间格的光标、高亮和所选物品一致，鼠标移动正常。原生报告真实 GUI RAW 包 4,791、fallback 包 0；MC 日志记录不同的 GUI 点击位置，不再固定为中心。日志和实测 DLL/Lua 副本保存在 `logs/live-human-20261006/`。该结果仅覆盖这次背包选择，持续3C、战斗、建造及菜单恢复继续分项验收。
+
+The user took over physical input testing in the afternoon. The new virtual-cursor DLL and reset-guard Lua loaded normally in stage C with takeover initially off and experimental tests disabled. The user confirmed correct inventory hover/selection for both the leftmost and a central slot. Genuine GUI RAW packets reached the native plugin, and Java logged distinct click coordinates. This verifies physical inventory selection for the tested build and scene; it does not establish the remaining gameplay or recovery checks. The game save and all 28 isolated MC world files were backed up and hash-checked before this run.
+
+同一轮用户确认：上下视角、前后移动、碰撞、F5 正常，但左右视角和 AD 侧移反向。数学复核确认旧 XYZ→XY−Z 的反射会使前向一致、右向相反；随后统一 XYZ 基，相机采用 `yaw=180−MC yaw / pitch=−MC pitch`，备用渲染相机的视图和投影同时改为 RH，三角形保留 A/B/C 绕序。关闭旧接管后用户确认原角色、移动与原菜单均恢复；D233 的报告有 63 次输入恢复写入、无错误且 input/draw/FOV pending 都为零。鬼武者与 MC 正常退出后，修改过的旧 MC 世界 33 个文件再次备份并逐文件核对。
+
+新版 DLL 为 `8D9056C815A4B66562E1AC1AD5790829993ACEAB5D1C06D13279793B26D709B1`；当前 Lua 为 `1A6F1D8DE85D34AFB348D560F2381397FCB6EA169FBC57E0F982588EBA2E96E1`。三项 CTest 均实际通过、无跳过：真实 DLL 回调覆盖 ReleaseAll 排在下一输入之前，矩阵检查覆盖 8 方位×7俯仰×3F5，GPU 像素确认 MC 右向在屏幕右侧。7 个 Lua 回归脚本通过，包括 37 个 PASS 组及 8 个配置案例（共45组）。JAR 未改变。新实景运行使用独立 `OnimushaMC-XYZ-v2` 世界。复杂场景的半径32导出 12,141 三角形触发单次12M体素候选检查预算，正确拒绝接管；运行半径改16后成功，未提高安全预算。源码及全部配置默认半径16，重采样余量为半径一半且不超过12格。Reset Scripts 后重新导出并确认新 epoch、连接及地形就绪；新版3C实景验收正在进行。
+
+The old physical test exposed a reflected right axis even though forward movement worked. The fix changes position, native rotations and renderer projection as one coordinate contract. Standalone direction/winding/matrix/GPU checks passed. A new isolated world avoids reinterpreting old placements. In the more complex scene, radius 32 exceeded the existing voxel work limit; radius 16 succeeded without raising or bypassing that limit. The new build's physical camera/movement acceptance is still pending at this checkpoint.
+
+上述新版本随后由用户实测通过：鼠标左右/上下、WASD 四向移动、跳跃、墙体/台阶碰撞、F5 三视角、E 背包两格点击均正常，另确认 MC 物品放置正常。测试后的 `status-after-direction-pass-flash.json` 保存于 `logs/live-human-xyz-v2-20261006/`。用户同时报告接管偶尔瞬间失效、闪回原角色，因此持续接管稳定性仍未通过。该快照的 `rejected=415` 与半径32失败后相同，期间未新增拒包；不能据此把本次闪回归因于新的预算超限。代码确认每次移动超过8格重新查询地形时会立即清掉 Lua `collision_ready`，3178三角形按每帧1600导出需要多帧，足以触发原绘制恢复；正在修正完整地形批次的交接并增加退出原因日志。
+
+The user then passed physical mouse direction, four-way movement, jumping, wall/step collision, all three F5 views and two-slot inventory selection with this coordinate build. Item placement also worked. Sustained takeover remains unresolved: the user observed brief returns to the native character. The post-test rejection count remained 415, unchanged since the earlier radius-32 failure. The Lua refresh path clears readiness while collecting terrain over several frames; complete-batch handoff and explicit release diagnostics are being implemented. This is a diagnosed code path, not a completed live fix. Block removal, placed-block collision, combat and health round trips still require separate acceptance.
+
+同一坐标版随后关闭接管，用户确认原角色与原操作恢复；`status-restored-after-F10.json` 的输入恢复写入123次、错误为空，input/draw/FOV待恢复项为零。碰撞交接修正版已构建但此刻尚未安装：DLL `5291E47D62D33D9ED8B7B95A9B285256C02E509D18115AAA0F6F104401F44931`；Lua `0E8ED3A83F9C83ECF062AF89F8CCCCBC7DFBF315A23BFF0FE0EE681AEACA30D9`。Lua8脚本55组通过，跨进程整批/绕回/容量不足/消费序号及GPU检查通过；真实DLL Lua接口因游戏仍持有正式映射而按77跳过，退出后必须重跑，不能标成三项全部通过。
+
+修复保留相同epoch/配置/MC进程/连接代次的已认证碰撞。成功发布新批次后，旧认证范围收窄至旧、新真实查询AABB交集，避免MC逐cell替换使padding边缘变为错误认证；整批消费确认后才切换新范围。未完成、95000上限截断、未知primitive、读取失败、队列不足或范围外不会伪装为就绪。当前只认证实测单位比例1；其他比例在native身体尺寸实测前拒绝接管。新增最近16条真实退出记录、分类计数、碰撞耗时及连接年龄，保持原预算和实验碰撞开关不变。
+
+The user also verified release of the coordinate build; the log confirms 123 input restoration writes with no errors or pending input/draw/FOV records. The handoff build above has not yet been installed or physically tested. It retains certified same-session terrain, narrows retained bounds to the old/new query intersection when queuing, and switches only after complete consumption. Partial or truncated queries remain unready. Default unit scale 1 is the measured body envelope; other scales require native body measurements. The actual DLL API test is explicitly pending after its live-mapping skip. Telemetry records real release transitions, packing time and connection age without raising existing limits.
+
+随后用户正常退出鬼武者，MC于20:21保存退出。XYZ世界28个文件及原游戏存档已备份并逐文件核对SHA256。上述修正版三项CTest重跑全部实际通过、无77跳过，日志 `logs/native-handoff-after-game-exit-20261006.txt`；Lua复跑55组通过，日志 `logs/lua-regression-handoff-20261006.txt`。DLL/Lua已安装并核对manifest，运行配置为C、接管关闭、半径16、实验原生碰撞及合成血量测试关闭。游戏修复效果等待下一次实测。
+
+After normal host/client exit and verified save backups, all three CTests passed without skips, including the actual new DLL's Lua API, integer generation/sequence diagnostics and invalid-ring gates. The new DLL/Lua are installed and hash-checked with takeover off. Their in-game handoff acceptance remains pending.
+
+用户确认5291 DLL正常进入场景；同一XYZ世界连接后，新3264三角形批次seq1完整消费，pack耗时178.6ms、pack/queue失败0。此时发现MC旧位置z22在新native目标z42的查询范围外，双foot检查把host.ready也关闭，阻止首次MC传送。Lua更新为 `AD35E3FAF8348840FDDB9259E344E7F32BB30537D731F7EC65580049722CDB3E`：未确认传送时仅以已消费的native目标覆盖发布bootstrap就绪，native ack gate仍禁止接管/绘制/输入；确认后继续检查两个身体范围。F10明确关闭→开启时仅增加传送seq、保持地形epoch，重新同步当前native位置；active未知越界不会被强制传送掩盖。新增7组实际production tick回归，共9脚本62组通过。已在接管关闭时热更新，等待Reset及实景结果。
+
+The new DLL loaded normally and the 3264-triangle batch was fully consumed with no packing/queue failures. The saved MC pose outside the new target AABB exposed a startup readiness cycle. The Lua-only revision separates certified target bootstrap from pose takeover; acknowledgement and both body bounds remain mandatory for control. Explicit off-to-on reserves one new teleport sequence without clearing terrain. Active unverified movement never forces a resync. Seven production tick cases passed, for 62 Lua cases total; the installed Lua awaits reset/live acceptance.
+
+用户Reset后，MC/native位置及新传送确认一致，完整覆盖就绪。随后用户连续移动、转向、跳跃并跨采样距离实测，确认没有再闪回原角色。`status-after-continuous-walk-pass.json`记录24次查询/入队/消费完成、失败0、拒包0；只有原菜单和关闭桥接两项退出原因，没有地形或连接退出，最大pack耗时178.6ms。用户另确认放方块后可以跳上稳定站立，拆除后原位置恢复畅通；对应快照为`status-after-build-collision-removal-pass.json`。这些结果覆盖本次stage0/area0，其他场景和长时间运行继续分项验证。
+
+After reset, the user passed continuous movement, turning, jumping and traversal across refresh thresholds without native-character flashes. All 24 terrain updates completed with zero failures or rejected packets. Recorded releases were native-menu ownership and explicit bridge disable, with no terrain/connection release; maximum packing time was 178.6 ms. The user also stood on a placed block, removed it and walked through its former position successfully. This verifies the tested stage0/area0 and build, not every scene or prolonged session.
+
 ## 已完成的独立检查 / Completed standalone checks
 
 | 检查 / Check | 证据 / Evidence | 边界 / Limit |
@@ -42,8 +78,8 @@ The saved checkpoint additionally retains failed restoration records and delegat
 | 原生地形查询 | 实际鬼武者场景 20/78 导出 8,450 个三角形，0 不支持形状 | 地形已读取，实际 MC 行走仍待验证 |
 | 分阶段恢复与普通受击 | DLL + A 正常；B 导出 9,821 个三角形；C 捕获 6 次玩家原生负血量回调，用户确认受击后正常 | 当时 MC 未连接；查询引用失效随后单独修复 |
 | 真实游戏首次绘制与接管 | 游戏 PID 56472 + MC PID 91036，stage20/area78；HUD、剑盾、F5 角色可见，active/ready=true，零拒包；关闭接管后原角色可见 | 原始按键恢复、背包连续点击、视角、战斗和建造尚未完整验收 |
-| F10 消息与鼠标事件路由 | 实际 DLL 回调覆盖普通/系统首按、重复、松开、GUI 事件缓存及重置；三项 CTest 实际通过，无跳过；F10 在实景可用 | 中心按钮坐标仍覆盖 GUI 目标位置，实景 GUI 点击未通过 |
-| 输入与绘制恢复 | 实景普通 F10 关闭：123 个字段写后回读成功，原角色/FOV恢复；Lua 输入10组、视觉3组、相机4组及两组既有回归通过 | 失败记录保留/重试补丁仅回归通过，菜单/切场景/输入对象替换待实测 |
+| F10 消息与鼠标事件路由 | 三项 CTest 实际通过、无跳过；用户真实鼠标确认两格背包点击正确；GUI RAW 包非零且 fallback 为零 | 2B64 DLL 的实景结果；后续构建不能直接沿用 |
+| 输入与绘制恢复 | 实景普通 F10 关闭：旧版123字段及D233版63次必要写入回读成功，原角色/操作/FOV恢复；坐标版7个Lua回归脚本共45组通过 | 菜单/切场景/输入对象替换待实测；永久 setter 失败或 Lua 销毁限制见 RESTORATION.md |
 | 原生地形打包压力测试 | 8,450 个三角形、729 区域、1,458 数据包；满队列安全拒绝；AddressSanitizer 无错误 | 独立进程，不证明游戏对象生命周期安全 |
 | 新生成的 unit-box RCOL | `.rcol.37` 序列化并重新读取；1 group / 1 request / 1 Box | 文件格式检查不能替代游戏物理注册 |
 
@@ -53,14 +89,17 @@ The saved checkpoint additionally retains failed restoration records and delegat
 
 | 项目 / Feature | 当前状态 / Status | 验收条件 / Acceptance |
 |---|---|---|
-| 玩家位置与相机接管 | 首次朝向同步通过，完整3C待验证 / Initial rotation verified | MC 移动和 F5 三种视角与原场景对齐 |
+| 玩家位置与相机接管 | 方向、四向移动、跳跃及F5通过；5291/AD35持续移动不再闪回，24次地形刷新无失败 / Physical 3C and refresh handoff passed in tested scene | 其他场景和长时间运行继续验证 |
 | 原角色隐藏与恢复 | 基本绘制通过；菜单/过场待验证 / Basic draw verified | 接管时隐藏；关闭后恢复已实测，菜单、过场或断开需继续验证 |
-| HUD、物品及 MC 角色绘制 | 实景绘制通过；GUI 点击仍失败 / Rendering verified, GUI click unresolved | HUD、剑盾、F5 角色及背包已显示；连续点击、遮挡及视角对齐待验证 |
-| 原地形碰撞 | 待验证 / Pending | 地板、台阶、墙体、场景切换正确且不掉穿 |
-| MC 方块建造和拆除 | 待验证 / Pending | 放置和拆除立即显示，MC 玩家碰撞一致 |
-| 鬼武者实体方块碰撞 | 实验功能停用 / Experimental, disabled | 原游戏实体受方块阻挡，拆除和切场景不残留碰撞；不得自动启用 |
-| MC 战斗 | 待验证 / Pending | 命中正确敌人，伤害和死亡流程正确，不重复结算 |
-| 百分比心形血量 | 待验证 / Pending | 75% 显示 7.5 心；受伤、治疗、最大血量变化、死亡正确 |
+| HUD、物品及 MC 角色绘制 | 实景绘制与两格 GUI 点击通过 / Rendering and two-slot physical GUI selection verified | HUD、剑盾、F5 角色及背包已显示；更多界面、遮挡及视角对齐待验证 |
+| 原地形碰撞 | 当前场景墙体和台阶实测通过；切场景待验证 / Walls and steps passed in tested scene | 地板、台阶、墙体、场景切换正确且不掉穿 |
+| MC 方块建造和拆除 | 放置、站上方块、拆除后走过原位置实测通过 / Placement, player collision and removal passed | 原地形不可拆除；NPC实体方块碰撞另列实验项 |
+| 鬼武者实体方块碰撞 | 未实现有效原生碰撞，用户确认无法阻挡敌人；实验创建仍停用 / Native NPC collision failed; experimental creation disabled | 原游戏实体受方块阻挡，拆除和切场景不残留碰撞；不得自动启用未验证创建路径 |
+| MC 战斗 | 用户重新确认剑击扣血；原生受击反馈缺失 / Sword damage confirmed; native reactions missing | 伤害已确认；死亡、受击、硬直和破甲仍须接入/验收；代理日志不能替代原生证据 |
+| 原生世界空间UI | 9164恢复血条显示、移动跟随，但转向仍固定；afterTick同步成功、beforeTick被原生相机覆写；继续时序诊断 / Bars visible and move correctly, but turning still fails; native overwrite timing remains under investigation | 随相机/角色正确重投影，F10关闭后恢复；不得通过隐藏UI冒充修复 |
+| 百分比心形血量 | 敌人攻击扣血及MC道具双向治疗用户实测通过 / Native hurt and MC healing passed | 最大血量变化、死亡、盾牌方向及菜单边界下的已拦截伤害仍待验证 |
+| 原场景深度与遮挡 | 私有碰撞深度，用户确认遮挡异常 / Private collision depth; native occlusion failed | 接入真实主场景深度并验证动态角色、装饰、动态分辨率和投影 |
+| 原游戏光照与阴影 | 尚未接入，MC自身亮度不能替代 / Native lighting/shadows not integrated | 验证室内外光照、原生阴影和渲染阶段 |
 | 过场和原游戏交互 | 待验证 / Pending | 原游戏交互保留；过场不抢相机或残留输入 |
 
 实际测试日志保存在任务目录的 logs/ 和游戏 reframework/data/；日志不含登录凭据。发布前更新此记录并附可复现的测试环境。

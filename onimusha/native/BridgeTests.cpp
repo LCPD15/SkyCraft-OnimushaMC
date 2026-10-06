@@ -1,8 +1,10 @@
 #include "Bridge.hpp"
 #include "CollisionPacking.hpp"
 #include "InputRouting.hpp"
+#include "CollisionBatchTests.hpp"
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -26,11 +28,15 @@ int peer(const wchar_t* name){
 }
 }
 int wmain(int argc,wchar_t** argv){
+    if(argc>3&&std::wstring(argv[1])==L"--collision-peer")return omc::tests::collision_peer(argv[2],std::uint32_t(std::wcstoul(argv[3],nullptr,10)));
     if(argc>2&&std::wstring(argv[1])==L"--peer")return peer(argv[2]);
     check(f10_key_action(WM_SYSKEYDOWN,VK_F10,0)==ToggleKeyAction::toggle&&f10_key_action(WM_KEYDOWN,VK_F10,0)==ToggleKeyAction::toggle,"F10 first normal/system key-down toggles bridge");
     check(f10_key_action(WM_SYSKEYDOWN,VK_F10,1ll<<30)==ToggleKeyAction::consume&&f10_key_action(WM_KEYDOWN,VK_F10,1ll<<30)==ToggleKeyAction::consume,"F10 repeated down is consumed without toggling");
     check(f10_key_action(WM_SYSKEYUP,VK_F10,0)==ToggleKeyAction::consume&&f10_key_action(WM_KEYUP,VK_F10,0)==ToggleKeyAction::consume,"F10 normal/system key-up is consumed without toggling");
     check(f10_key_action(WM_SYSKEYDOWN,VK_F11,0)==ToggleKeyAction::pass&&f10_key_action(WM_CHAR,VK_F10,0)==ToggleKeyAction::pass,"unrelated messages retain original routing");
+    check(captured_input_message(WM_LBUTTONDOWN,0,true)&&captured_input_message(WM_INPUT,0,true)&&captured_input_message(WM_CHAR,'x',false)&&captured_input_message(WM_KEYDOWN,'W',false),"pending-release guard identifies existing routed MC input categories");
+    check(!captured_input_message(WM_KEYDOWN,VK_INSERT,true)&&!captured_input_message(WM_KEYUP,VK_ESCAPE,false)&&!captured_input_message(WM_SYSKEYDOWN,'G',false),"pending-release guard preserves REFramework Insert and non-GUI host Escape/G");
+    check(!captured_input_message(WM_CLOSE,0,true)&&!captured_input_message(WM_ACTIVATEAPP,1,true)&&!captured_input_message(WM_PAINT,0,true)&&captured_input_message(WM_KEYDOWN,VK_ESCAPE,true),"pending-release guard passes system window messages while retaining GUI key capture");
     CursorLookFallback look;check(!look.move(150,400,1920,1080).send,"newly routed cursor initializes baseline without a camera jump");
     auto lookDelta=look.move(158,395,1920,1080);check(lookDelta.send&&lookDelta.x==8&&lookDelta.y==-5,"ordinary relative cursor movement preserves both signed deltas");
     check(!look.move(960,540,1920,1080).send,"host center warp does not emit a look delta");
@@ -39,12 +45,34 @@ int wmain(int argc,wchar_t** argv){
     lookDelta=look.move(1696,905,1920,1080);check(lookDelta.send&&lookDelta.x==-4&&lookDelta.y==5,"movement resumes normally after focus or menu transition");
     check(!look.move(961,539,1920,1080).send,"one-pixel rounded center warp is ignored");
     check(!look.move(5,6,0,0).send&&!look.move(1920,1080,3840,2160).send,"invalid client extent resets baseline and different viewport center remains safe");
-    GuiEventCursor gui;
-    check(gui.update(895,767,2560,1440,true)&&gui.known()&&gui.u()==895.0/2560&&gui.v()==767.0/1440,"GUI click preserves LPARAM client position across DPI scaling");
-    check(!gui.update(1280,720,2560,1440)&&!gui.update(1281,719,2560,1440)&&gui.u()==895.0/2560,"GUI capture center warps never overwrite the last event position");
-    check(gui.update(1280,720,2560,1440,true)&&gui.u()==0.5&&gui.v()==0.5,"an explicit center click remains selectable");
-    check(gui.update(-10,1450,2560,1440)&&gui.u()<0&&gui.v()>1,"outside GUI clicks retain vanilla drop coordinates");
-    gui.reset();check(!gui.known()&&!gui.update(1280,720,2560,1440)&&!gui.update(1,1,0,0),"GUI transition/focus reset keeps cursor unknown until a real event");
+    const auto closeTo=[](double a,double b){return std::abs(a-b)<1e-12;};
+    MouseInputRouter mouse;
+    check(mouse.sync_mode(true)&&mouse.cursor().known()&&mouse.cursor().u()==0.5&&mouse.cursor().v()==0.5&&mouse.guiOpens==1,"GUI open establishes one centered virtual cursor baseline");
+    auto moved=mouse.raw_delta(-385,47,2560,1440);
+    check(moved.send&&closeTo(mouse.cursor().u(),895.0/2560)&&closeTo(mouse.cursor().v(),767.0/1440)&&mouse.cursor().raw(),"GUI relative RAW deltas accumulate normalized client coordinates");
+    check(!mouse.legacy_move(895,767,2560,1440).send&&!mouse.legacy_move(1280,720,2560,1440).send&&closeTo(mouse.cursor().u(),895.0/2560),"RAW GUI input excludes duplicate legacy events and host center warps");
+    check(!mouse.sync_mode(true)&&mouse.guiOpens==1&&closeTo(mouse.cursor().u(),895.0/2560),"GUI-to-GUI transition retains normalized cursor without a second baseline");
+    moved=mouse.raw_delta(385,-47,2560,1440);
+    check(moved.send&&closeTo(mouse.cursor().u(),0.5)&&closeTo(mouse.cursor().v(),0.5),"relative motion can select the genuine GUI center after prior movement");
+    moved=mouse.raw_delta(192,108,1920,1080);
+    check(moved.send&&closeTo(mouse.cursor().u(),0.6)&&closeTo(mouse.cursor().v(),0.6),"client resize retains normalized cursor and scales subsequent RAW deltas");
+    mouse.raw_delta(INT32_MAX,INT32_MIN,1920,1080);
+    check(mouse.cursor().u()==1&&mouse.cursor().v()==0,"extreme signed RAW movement clamps virtual cursor to client edges");
+    check(!mouse.raw_delta(40,50,0,0).send&&mouse.cursor().u()==1&&mouse.cursor().v()==0,"invalid client extent cannot change virtual cursor");
+    check(mouse.guiRawPackets==5&&mouse.guiFallbackPackets==0&&mouse.guiRawDx==std::int64_t(INT32_MAX)+192+40&&mouse.guiRawDy==std::int64_t(INT32_MIN)+108+50,"GUI diagnostic counters count packets and signed deltas without frame logging");
+    mouse.release();check(!mouse.known_mode()&&!mouse.cursor().known()&&!mouse.raw_look()&&!mouse.cursor().raw(),"focus or route release clears RAW selection and cursor state");
+    check(mouse.sync_mode(true)&&mouse.guiOpens==2&&mouse.cursor().u()==0.5&&mouse.guiRawPackets==5,"GUI reopen recenters while retaining lifetime diagnostic counts");
+    moved=mouse.legacy_move(480,810,1920,1080);
+    check(moved.send&&closeTo(mouse.cursor().u(),0.25)&&closeTo(mouse.cursor().v(),0.75),"legacy GUI fallback uses centered baseline before the first relative RAW packet");
+    check(!mouse.legacy_move(960,540,1920,1080).send&&!mouse.legacy_move(961,539,1920,1080).send&&closeTo(mouse.cursor().u(),0.25),"legacy GUI center warps only rebase movement and never replace virtual position");
+    mouse.raw_delta(10,0,1920,1080);
+    check(!mouse.legacy_move(600,800,1920,1080).send&&mouse.guiFallbackPackets==1,"first relative RAW packet disables fallback double counting for this GUI session");
+    mouse.sync_mode(false);moved=mouse.raw_delta(-12,8,1920,1080);
+    check(moved.send&&moved.x==-12&&moved.y==8&&mouse.raw_look()&&!mouse.legacy_move(5,10,1920,1080).send,"non-GUI RAW preserves signed look deltas and prevents duplicate legacy movement");
+    mouse.release();mouse.sync_mode(false);
+    check(!mouse.raw_look()&&!mouse.legacy_move(400,300,1920,1080).send,"new route resets historical RAW look and initializes the fallback baseline");
+    moved=mouse.legacy_move(406,294,1920,1080);
+    check(moved.send&&moved.x==6&&moved.y==-6,"look fallback resumes after routing reset rather than remaining permanently disabled");
     const std::wstring testName=L"Local\\OnimushaMC_Test_"+std::to_wstring(GetCurrentProcessId());
     Bridge link;check(link.open(testName),"create isolated real Windows shared memory");if(!link.testing_base())return 1;
     check(!link.alive(),"no peer fails closed");proto::SkyState sky{};sky.posX=1;sky.posY=2;sky.posZ=3;check(link.publish_host(sky),"publish seqlock host state");check(link.input(proto::kInKey,26,1),"publish keyboard input ring");
@@ -75,5 +103,6 @@ int wmain(int argc,wchar_t** argv){
     proto::RenSection sh{1,2,3,3};proto::RenVertex verts[3]{};auto sp=payload(sh,std::span<const proto::RenVertex>(verts));check(store.consume(proto::kRenSection,sp)&&store.sections.size()==1,"persistent section mesh");sh.vertexCount=0;auto empty=payload(sh,std::span<const proto::RenVertex>());check(store.consume(proto::kRenSection,empty)&&store.sections.empty(),"remove section mesh");
     proto::RenSolids solid{0,0,0,1};std::uint8_t bits[512]{};bits[0]=1;auto bp=payload(solid,std::span<const std::uint8_t>(bits));check(store.consume(proto::kRenSolids,bp)&&store.solidChanges.size()==1&&store.solidChanges[0].solid,"solid block collider change");solid.count=0;auto rp=payload(solid,std::span<const std::uint8_t>());check(store.consume(proto::kRenSolids,rp)&&!store.solidChanges.back().solid,"collider removed with block");
     auto* rr=base+proto::kOffRenderRing;*reinterpret_cast<proto::ColMsgHeader*>(rr+proto::kRenRingDataOff)={proto::kRenAtlas,0xFFFFFFFFu};*reinterpret_cast<std::uint64_t*>(rr)=8;link.drain_render(store);check(link.rejected>0&&*reinterpret_cast<std::uint64_t*>(rr+proto::kRenRingTailOff)==8,"malformed ring skipped within bounds");
+    omc::tests::collision_batch_tests(check);
     std::printf("%d failure(s)\n",failures);return failures?1:0;
 }

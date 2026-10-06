@@ -19,11 +19,11 @@ return function()
   assert(math.abs(((angles.yaw-yaw+180)%360)-180)<0.000001)
   assert(math.abs(angles.pitch-pitch)<0.000001)
  end
- check({x=0,y=0,z=-1},0,0)
- check({x=0,y=0,z=1},180,0)
+ check({x=0,y=0,z=-1},180,0)
+ check({x=0,y=0,z=1},0,0)
  check({x=1,y=0,z=0},-90,0)
  check({x=-1,y=0,z=0},90,0)
- check({x=1,y=1,z=-1},-45,-35.264389682754654)
+ check({x=1,y=1,z=-1},-135,-35.264389682754654)
  print('PASS RE axis directions convert to MC yaw/pitch')
  check({x=0,y=1,z=0},37,-90,37)
  check({x=0,y=-1,z=0},-52,90,-52)
@@ -35,7 +35,7 @@ return function()
  end
  assert(not camera_angles_from_look({x=-1e308,y=0,z=0},{x=1e308,y=0,z=0}))
  assert(not camera_angles_from_look(nil,{x=1,y=0,z=0}))
- check({x=1e308,y=0,z=-1e308},-45,0)
+ check({x=1e308,y=0,z=-1e308},-135,0)
  print('PASS non-finite, missing and zero directions fail; finite normalization avoids overflow')
  state.camera_transform={get_position=function() reads=reads+1;return origin end}
  local look={x=1,y=0,z=0}

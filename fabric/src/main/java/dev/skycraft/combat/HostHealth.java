@@ -33,6 +33,12 @@ public final class HostHealth {
 		return mirrored(player) && !SYNCING.get();
 	}
 
+	/** Only observation: do not infer native ownership from an old owner UUID and heartbeat alone. */
+	public static boolean canObserveNativeHit(ServerPlayer player) {
+		Snapshot state = snapshot;
+		return mirrored(player) && state != null && currentSession(state.generation, state.epoch);
+	}
+
 	public static void beginHealing() { HEALING.set(true); }
 	public static void endHealing() { HEALING.set(false); }
 

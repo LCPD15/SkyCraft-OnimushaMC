@@ -4,6 +4,7 @@ import dev.skycraft.link.Proto;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.world.damagesource.DamageSource;
@@ -29,6 +30,9 @@ public class SkyrimActorEntity extends LivingEntity {
 	private static final EntityDataAccessor<Integer> FORM_ID = SynchedEntityData.defineId(SkyrimActorEntity.class, EntityDataSerializers.INT);
 	private static final EntityDataAccessor<Float> WIDTH = SynchedEntityData.defineId(SkyrimActorEntity.class, EntityDataSerializers.FLOAT);
 	private static final EntityDataAccessor<Float> HEIGHT = SynchedEntityData.defineId(SkyrimActorEntity.class, EntityDataSerializers.FLOAT);
+	private static final EntityDataAccessor<Boolean> HOST_SESSION_SET = SynchedEntityData.defineId(SkyrimActorEntity.class, EntityDataSerializers.BOOLEAN);
+	private static final EntityDataAccessor<Integer> HOST_GENERATION = SynchedEntityData.defineId(SkyrimActorEntity.class, EntityDataSerializers.INT);
+	private static final EntityDataAccessor<Integer> HOST_EPOCH = SynchedEntityData.defineId(SkyrimActorEntity.class, EntityDataSerializers.INT);
 
 	// This tick's hit, flushed to Skyrim by SkyCombat after all attacks for the tick have landed
 	// (Player.attack adds its sprint/enchantment knockback after hurtServer returns).
@@ -55,12 +59,35 @@ public class SkyrimActorEntity extends LivingEntity {
 		this.entityData.set(FORM_ID, formId);
 	}
 
+	public void setHostSession(ActorProxyIdentity.Session session) {
+		this.entityData.set(HOST_GENERATION, session.generation());
+		this.entityData.set(HOST_EPOCH, session.epoch());
+		this.entityData.set(HOST_SESSION_SET, true);
+	}
+
+	public boolean hasHostSession() {
+		return this.entityData.get(HOST_SESSION_SET);
+	}
+
+	public boolean belongsTo(ActorProxyIdentity.Session session) {
+		return hasHostSession() && session.matches(this.entityData.get(HOST_GENERATION), this.entityData.get(HOST_EPOCH));
+	}
+
+	public void refreshHostName(String name) {
+		Component current = this.getCustomName();
+		ActorProxyIdentity.refreshName(current == null ? null : current.getString(), name,
+			updated -> this.setCustomName(updated.isEmpty() ? null : Component.literal(updated)));
+	}
+
 	@Override
 	protected void defineSynchedData(SynchedEntityData.Builder builder) {
 		super.defineSynchedData(builder);
 		builder.define(FORM_ID, 0);
 		builder.define(WIDTH, 0.6F);
 		builder.define(HEIGHT, 1.8F);
+		builder.define(HOST_SESSION_SET, false);
+		builder.define(HOST_GENERATION, 0);
+		builder.define(HOST_EPOCH, 0);
 	}
 
 	public void setSize(float width, float height) {

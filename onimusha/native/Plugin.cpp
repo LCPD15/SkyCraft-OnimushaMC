@@ -26,11 +26,11 @@ proto::McState mc{};
 const REFrameworkPluginInitializeParam* api{};
 bool enabled=false,ready=false,collisionReady=false,cameraReady=false,routed=false;
 std::uint64_t submittedMs{};
+std::uint64_t observedCollisionGeneration{};
+bool reUiOpen{},reUiSampled{};
 HWND window{};
-CursorLookFallback cursorLook;
-GuiEventCursor guiCursor;
-bool routedScreenOpen=false;
-bool rawLook=false;
+MouseInputRouter mouseRouter;
+bool pendingGuiCursor=false;
 bool pendingRelease=false;
 std::uint16_t surrogate{};
 using RegionKey=std::array<std::int32_t,6>;
@@ -40,17 +40,41 @@ double number(lua_State* L,int table,const char* key,double fallback=0){lua_getf
 bool valid_number(lua_State* L,int table,const char* key,double& value){lua_getfield(L,table,key);int valid{};value=lua_tonumberx(L,-1,&valid);lua_pop(L,1);return valid&&std::isfinite(value);}
 bool boolean(lua_State* L,int table,const char* key,bool fallback=false){lua_getfield(L,table,key);const bool v=lua_isnil(L,-1)?fallback:lua_toboolean(L,-1)!=0;lua_pop(L,1);return v;}
 void nfield(lua_State* L,const char* key,double n){lua_pushnumber(L,n);lua_setfield(L,-2,key);}
+void ifield(lua_State* L,const char* key,std::uint64_t n){lua_pushinteger(L,lua_Integer(n));lua_setfield(L,-2,key);}
 void bfield(lua_State* L,const char* key,bool n){lua_pushboolean(L,n);lua_setfield(L,-2,key);}
 void sfield(lua_State* L,const char* key,const char* s){lua_pushstring(L,s);lua_setfield(L,-2,key);}
-bool active(){
-    return enabled&&ready&&collisionReady&&cameraReady&&renderer::ready()&&bridge.alive()&&(mc.flags&proto::kMcInWorld)&&mc.teleportAck==host.teleportSeq&&submittedMs&&GetTickCount64()-submittedMs<500&&(host.flags&proto::kSkyInGame)&&!(host.flags&(proto::kSkyMenuOpen|proto::kSkyLoading))&&!(api&&api->functions->is_drawing_ui());
+void release();
+void sync_collision_generation(const CollisionStatus& state){
+    if(!state.ringValid)collisionReady=false;
+    if(observedCollisionGeneration==state.generation)return;observedCollisionGeneration=state.generation;
+    collisionReady=false;collisionRegions.clear();store.collisionTriangles.clear();++store.collisionRevision;
+    if(routed||mouseRouter.known_mode())release();
 }
-void clear_gui_cursor(){guiCursor.reset();renderer::set_gui_cursor(false);}
-void release(){pendingRelease=!bridge.input(proto::kInReleaseAll);routed=false;cursorLook.reset();clear_gui_cursor();routedScreenOpen=false;surrogate=0;}
-bool publish_gui_cursor(int x,int y,int width,int height,bool explicitButton=false){
-    if(!guiCursor.update(x,y,width,height,explicitButton))return false;
-    if(!bridge.input(proto::kInCursor,0,int(guiCursor.u()*host.viewportW),int(guiCursor.v()*host.viewportH)))return false;
-    renderer::set_gui_cursor(true,guiCursor.u(),guiCursor.v());return true;
+const char* not_ready_reason(const CollisionStatus* supplied=nullptr){
+    const auto state=supplied?*supplied:bridge.collision_status();sync_collision_generation(state);reUiSampled=false;
+    // Keep the exact former active() gate order and its short-circuited UI query.
+    if(!enabled)return "disabled";if(!ready)return "host_not_ready";if(!collisionReady)return "collision_not_ready";
+    if(!cameraReady)return "camera_not_ready";if(!renderer::ready())return "renderer_not_ready";
+    if(!state.connected)return "mc_disconnected";if(!(mc.flags&proto::kMcInWorld))return "mc_not_in_world";
+    if(mc.teleportAck!=host.teleportSeq)return "teleport_ack_mismatch";if(!submittedMs)return "host_missing";
+    const auto now=GetTickCount64();if(now<submittedMs||now-submittedMs>=500)return "host_stale";
+    if(!(host.flags&proto::kSkyInGame))return "host_not_in_game";if(host.flags&proto::kSkyMenuOpen)return "host_menu";
+    if(host.flags&proto::kSkyLoading)return "host_loading";
+    if(api&&api->functions){reUiOpen=api->functions->is_drawing_ui();reUiSampled=true;if(reUiOpen)return "reframework_ui";}
+    return nullptr;
+}
+bool active(){return not_ready_reason()==nullptr;}
+void release(){pendingRelease=!bridge.input(proto::kInReleaseAll);routed=false;mouseRouter.release();pendingGuiCursor=false;renderer::set_gui_cursor(false);surrogate=0;}
+bool retry_pending_release(){if(pendingRelease)pendingRelease=!bridge.input(proto::kInReleaseAll);return !pendingRelease;}
+bool publish_gui_cursor(){
+    const auto& cursor=mouseRouter.cursor();if(!cursor.known())return false;
+    pendingGuiCursor=!bridge.input(proto::kInCursor,0,int(cursor.u()*host.viewportW),int(cursor.v()*host.viewportH));
+    if(pendingGuiCursor)return false;renderer::set_gui_cursor(true,cursor.u(),cursor.v());return true;
+}
+void sync_input_mode(bool gui){
+    if(!mouseRouter.sync_mode(gui))return;
+    pendingGuiCursor=false;
+    if(gui)publish_gui_cursor();else renderer::set_gui_cursor(false);
 }
 int submit(lua_State* L){
     if(!lua_istable(L,1)){lua_pushboolean(L,false);return 1;}std::scoped_lock lock(mutex);
@@ -70,8 +94,8 @@ int submit(lua_State* L){
     s.healthCurrent=validHealth?float(hpCurrent):0;s.healthMax=validHealth?float(hpMaximum):0;
     s.healthCurrent=std::min(s.healthCurrent,s.healthMax);s.hostUnitsPerBlock=std::clamp(number(L,1,"units_per_block",1),0.001,1000.0);s.healthRevision=std::uint32_t(number(L,1,"health_revision"));
     if(validHealth&&s.healthCurrent<=0)s.flags|=1u<<4;
-    if(host.collisionEpoch!=s.collisionEpoch){collisionReady=false;store.clear();store.collisionTriangles.clear();collisionRegions.clear();++store.collisionRevision;cameraReady=false;release();}
-    host=s;submittedMs=GetTickCount64();const bool ok=bridge.publish_host(s)&&(!requestedReady||ready);if(!active()&&routed)release();lua_pushboolean(L,ok);return 1;
+    if(host.collisionEpoch!=s.collisionEpoch){bridge.invalidate_collision();collisionReady=false;store.clear();store.collisionTriangles.clear();collisionRegions.clear();++store.collisionRevision;cameraReady=false;release();}
+    host=s;submittedMs=GetTickCount64();const bool ok=bridge.publish_host(s)&&(!requestedReady||ready);if(!active()&&(routed||mouseRouter.known_mode()))release();lua_pushboolean(L,ok);return 1;
 }
 int read_mc(lua_State* L){
     std::scoped_lock lock(mutex);proto::McState s{};if(!bridge.read_mc(s)){lua_pushnil(L);return 1;}lua_createtable(L,0,28);
@@ -90,7 +114,14 @@ int send_hurt(lua_State* L){
     lua_pushboolean(L,ok);return 1;
 }
 int status(lua_State* L){
-    std::scoped_lock lock(mutex);lua_createtable(L,0,19);bfield(L,"connected",bridge.alive());bfield(L,"enabled",enabled);bfield(L,"ready",active());bfield(L,"host_ready",ready);bfield(L,"collision_ready",collisionReady);bfield(L,"camera_ready",cameraReady);bfield(L,"renderer_ready",renderer::ready());bfield(L,"gui_cursor_known",guiCursor.known());nfield(L,"gui_cursor_u",guiCursor.u());nfield(L,"gui_cursor_v",guiCursor.v());nfield(L,"protocol",proto::kVersion);nfield(L,"rejected",double(bridge.rejected));nfield(L,"render_invalid",double(store.invalidMessages));nfield(L,"sections",double(store.sections.size()));nfield(L,"textures",double(store.textures.size()));nfield(L,"overlay_frame",double(overlay.frameId));sfield(L,"error",bridge.error.c_str());sfield(L,"mapping","Local\\OnimushaMC_v1");return 1;
+    std::scoped_lock lock(mutex);const auto state=bridge.collision_status();const auto* reason=not_ready_reason(&state);const auto now=GetTickCount64();lua_createtable(L,0,48);
+    bfield(L,"connected",state.connected);bfield(L,"enabled",enabled);bfield(L,"ready",reason==nullptr);sfield(L,"not_ready_reason",reason?reason:"ready");
+    bfield(L,"host_ready",ready);bfield(L,"collision_ready",collisionReady);bfield(L,"camera_ready",cameraReady);bfield(L,"renderer_ready",renderer::ready());
+    nfield(L,"host_age_ms",submittedMs&&submittedMs<=now?double(now-submittedMs):-1);nfield(L,"mc_heartbeat_age_ms",state.heartbeatAgeMs);bfield(L,"re_ui_open",reUiOpen);bfield(L,"re_ui_sampled",reUiSampled);
+    ifield(L,"mc_pid",state.mcPid);ifield(L,"collision_epoch",host.collisionEpoch);ifield(L,"collision_generation",state.generation);ifield(L,"collision_publish_seq",state.publishSeq);ifield(L,"collision_consumed_seq",state.consumedSeq);
+    ifield(L,"collision_batch_end",state.batchEnd);ifield(L,"collision_head",state.head);ifield(L,"collision_tail",state.tail);bfield(L,"collision_ring_valid",state.ringValid);
+    nfield(L,"collision_pack_ms",bridge.collisionPackMs);nfield(L,"collision_pack_max_ms",bridge.collisionPackMaxMs);ifield(L,"collision_pack_failures",bridge.collisionPackFailures);ifield(L,"collision_queue_failures",bridge.collisionQueueFailures);sfield(L,"collision_failure",bridge.collisionFailure.c_str());
+    bfield(L,"gui_cursor_known",mouseRouter.cursor().known());nfield(L,"gui_cursor_u",mouseRouter.cursor().u());nfield(L,"gui_cursor_v",mouseRouter.cursor().v());bfield(L,"gui_cursor_raw",mouseRouter.cursor().raw());bfield(L,"raw_look",mouseRouter.raw_look());nfield(L,"gui_raw_packets",double(mouseRouter.guiRawPackets));nfield(L,"gui_raw_dx",double(mouseRouter.guiRawDx));nfield(L,"gui_raw_dy",double(mouseRouter.guiRawDy));nfield(L,"gui_fallback_packets",double(mouseRouter.guiFallbackPackets));nfield(L,"gui_open_count",double(mouseRouter.guiOpens));nfield(L,"look_raw_packets",double(mouseRouter.lookRawPackets));nfield(L,"protocol",proto::kVersion);nfield(L,"rejected",double(bridge.rejected));nfield(L,"render_invalid",double(store.invalidMessages));nfield(L,"sections",double(store.sections.size()));nfield(L,"textures",double(store.textures.size()));nfield(L,"overlay_frame",double(overlay.frameId));sfield(L,"error",bridge.error.c_str());sfield(L,"mapping","Local\\OnimushaMC_v1");return 1;
 }
 int publish_actors(lua_State* L){
     if(!lua_istable(L,1)){lua_pushboolean(L,false);return 1;}std::scoped_lock lock(mutex);const auto count=std::min(lua_rawlen(L,1),std::size_t(proto::kMaxActors));std::vector<proto::ActorRecord> rows;rows.reserve(count);
@@ -104,6 +135,7 @@ int publish_tris(lua_State* L){
     const int table=lua_gettop(L);const auto count=lua_rawlen(L,table);std::vector<proto::ColTri> tris;tris.reserve(count);const char* names[]={"ax","ay","az","bx","by","bz","cx","cy","cz"};
     for(std::size_t i=1;i<=count;i++){lua_rawgeti(L,table,lua_Integer(i));if(lua_istable(L,-1)){proto::ColTri t{};for(int j=0;j<9;j++)t.v[j]=float(number(L,lua_gettop(L),names[j]));t.flags=std::uint32_t(number(L,lua_gettop(L),"flags"))&~proto::kTriDiggable;tris.push_back(t);}lua_pop(L,1);}lua_pop(L,1);
     const bool ok=!tris.empty()&&bridge.publish_collision(epoch,region,tris);
+    sync_collision_generation(bridge.collision_status());
     if(ok){
         const RegionKey key{region.minX,region.minY,region.minZ,region.maxX,region.maxY,region.maxZ};collisionRegions[key]=std::move(tris);
         auto distance=[](const RegionKey& k){const double x=(double(k[0])+k[3])*0.5-host.posX,y=(double(k[1])+k[4])*0.5-host.posY,z=(double(k[2])+k[5])*0.5-host.posZ;return x*x+y*y+z*z;};
@@ -122,13 +154,15 @@ void on_lua(lua_State* L){
     static const luaL_Reg functions[]={{"submit_host",submit},{"tick_host",submit},{"read_mc",read_mc},{"get_mc_state",read_mc},{"drain_events",drain_events},{"poll_events",drain_events},{"set_enabled",set_enabled},{"send_hurt",send_hurt},{"status",status},{"publish_actors",publish_actors},{"publish_collision_tris",publish_tris},{"drain_solids",drain_solids},{"set_camera",set_camera},{nullptr,nullptr}};
     luaL_newlib(L,functions);lua_setglobal(L,"onimusha_mc");api->functions->log_info("OnimushaMC: Lua bridge registered; takeover disabled until adapter passes bindings");
 }
-void on_lua_destroyed(lua_State*){std::scoped_lock lock(mutex);enabled=ready=collisionReady=cameraReady=false;release();host.flags=0;bridge.publish_host(host);}
+void on_lua_destroyed(lua_State*){std::scoped_lock lock(mutex);enabled=ready=collisionReady=cameraReady=false;bridge.invalidate_collision();release();host.flags=0;bridge.publish_host(host);}
 void on_present(){
     std::scoped_lock lock(mutex);bridge.heartbeat();bridge.drain_render(store);bridge.overlay(overlay);bridge.world_entities(store.worldEntities);const bool have=bridge.read_mc(mc);
-    if(have&&routed&&routedScreenOpen!=bool(mc.flags&proto::kMcScreenOpen)){cursorLook.reset();clear_gui_cursor();routedScreenOpen=(mc.flags&proto::kMcScreenOpen)!=0;}
-    if(pendingRelease)pendingRelease=!bridge.input(proto::kInReleaseAll);
+    const bool inputReady=retry_pending_release();
     if(enabled&&bridge.alive())renderer::prepare();
-    if(!active()&&routed)release();if(have&&active())renderer::render(store,overlay,mc,camera);
+    const bool takeover=have&&active();
+    if(takeover&&window&&GetForegroundWindow()==window){if(inputReady){sync_input_mode((mc.flags&proto::kMcScreenOpen)!=0);if(pendingGuiCursor)publish_gui_cursor();}}
+    else if(routed||mouseRouter.known_mode())release();
+    if(takeover)renderer::render(store,overlay,mc,camera);
 }
 void on_reset(){std::scoped_lock lock(mutex);renderer::reset();}
 std::uint16_t scan_sdl(WPARAM key,LPARAM lparam){
@@ -143,10 +177,13 @@ bool on_message(void* hwnd,unsigned int message,unsigned long long wparam,long l
     const auto toggle=f10_key_action(message,wparam,lparam);
     if(toggle!=ToggleKeyAction::pass){if(toggle==ToggleKeyAction::toggle){enabled=!enabled;release();}return false;}
     const bool route=active()&&GetForegroundWindow()==window;
-    if(!route){if(routed)release();return true;}
+    if(!route){if(routed||mouseRouter.known_mode())release();return true;}
     const bool screenOpen=(mc.flags&proto::kMcScreenOpen)!=0;
-    if(!routed||routedScreenOpen!=screenOpen){cursorLook.reset();clear_gui_cursor();}
-    routed=true;routedScreenOpen=screenOpen;
+    // A failed release must precede new GUI baselines and routed input, even
+    // when the next window message arrives before Present. Keep system messages
+    // and the existing original-game/REFramework shortcut exceptions passing.
+    if(!retry_pending_release())return !captured_input_message(message,wparam,screenOpen);
+    sync_input_mode(screenOpen);routed=true;
     switch(message){
     case WM_KEYDOWN:case WM_KEYUP:case WM_SYSKEYDOWN:case WM_SYSKEYUP:{
         const bool down=message==WM_KEYDOWN||message==WM_SYSKEYDOWN;
@@ -162,27 +199,29 @@ bool on_message(void* hwnd,unsigned int message,unsigned long long wparam,long l
     case WM_LBUTTONDOWN:case WM_LBUTTONUP:case WM_RBUTTONDOWN:case WM_RBUTTONUP:case WM_MBUTTONDOWN:case WM_MBUTTONUP:case WM_XBUTTONDOWN:case WM_XBUTTONUP:{
         const bool down=message==WM_LBUTTONDOWN||message==WM_RBUTTONDOWN||message==WM_MBUTTONDOWN||message==WM_XBUTTONDOWN;
         if(mc.flags&proto::kMcScreenOpen){
-            // LPARAM retains this click's client position even if the host has
-            // already recentered the OS cursor by the time this callback runs.
-            RECT rect{};
-            if(!GetClientRect(window,&rect)||!publish_gui_cursor(GET_X_LPARAM(lparam),GET_Y_LPARAM(lparam),
-                rect.right-rect.left,rect.bottom-rect.top,true))return false;
+            // Captured button LPARAM may already be the host's center. The
+            // virtual cursor is authoritative, including an intentional center click.
+            if(!publish_gui_cursor()){release();return false;}
         }
-        const auto button=message==WM_LBUTTONDOWN||message==WM_LBUTTONUP?1:message==WM_MBUTTONDOWN||message==WM_MBUTTONUP?2:message==WM_RBUTTONDOWN||message==WM_RBUTTONUP?3:GET_XBUTTON_WPARAM(wparam)==XBUTTON1?4:5;bridge.input(proto::kInMouseButton,std::uint16_t(button),down?1:0);return false;
+        const auto button=message==WM_LBUTTONDOWN||message==WM_LBUTTONUP?1:message==WM_MBUTTONDOWN||message==WM_MBUTTONUP?2:message==WM_RBUTTONDOWN||message==WM_RBUTTONUP?3:GET_XBUTTON_WPARAM(wparam)==XBUTTON1?4:5;
+        // Never leave a held button behind when the bounded input ring fills.
+        // release() retries ReleaseAll from Present as soon as space is available.
+        if(!bridge.input(proto::kInMouseButton,std::uint16_t(button),down?1:0))release();return false;
     }
     case WM_MOUSEWHEEL:bridge.input(proto::kInScroll,0,GET_WHEEL_DELTA_WPARAM(wparam));return false;
     case WM_MOUSEMOVE:{
         POINT p{GET_X_LPARAM(lparam),GET_Y_LPARAM(lparam)};RECT rect{};GetClientRect(window,&rect);
-        if(mc.flags&proto::kMcScreenOpen){publish_gui_cursor(p.x,p.y,rect.right-rect.left,rect.bottom-rect.top);cursorLook.reset();}
-        else if(!rawLook){const auto delta=cursorLook.move(p.x,p.y,rect.right,rect.bottom);if(delta.send)bridge.input(proto::kInLookDelta,0,delta.x,delta.y);}return false;
+        const auto delta=mouseRouter.legacy_move(p.x,p.y,rect.right-rect.left,rect.bottom-rect.top);
+        if(delta.send){if(screenOpen)publish_gui_cursor();else bridge.input(proto::kInLookDelta,0,delta.x,delta.y);}return false;
     }
     case WM_INPUT:{
         // The pinned REFramework WindowsMessageHook calls DefWindowProc when
         // this callback returns false, including RIM_INPUT system cleanup.
-        if(mc.flags&proto::kMcScreenOpen)return false;
         RAWINPUT ri{};UINT bytes=sizeof(ri);
         if(GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam),RID_INPUT,&ri,&bytes,sizeof(RAWINPUTHEADER))!=UINT(-1)&&ri.header.dwType==RIM_TYPEMOUSE&&!(ri.data.mouse.usFlags&MOUSE_MOVE_ABSOLUTE)){
-            rawLook=true;bridge.input(proto::kInLookDelta,0,ri.data.mouse.lLastX,ri.data.mouse.lLastY);
+            RECT rect{};GetClientRect(window,&rect);
+            const auto delta=mouseRouter.raw_delta(ri.data.mouse.lLastX,ri.data.mouse.lLastY,rect.right-rect.left,rect.bottom-rect.top);
+            if(delta.send){if(screenOpen)publish_gui_cursor();else bridge.input(proto::kInLookDelta,0,delta.x,delta.y);}
         }return false;
     }
     default:return true;

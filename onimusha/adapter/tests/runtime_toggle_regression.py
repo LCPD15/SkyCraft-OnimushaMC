@@ -5,7 +5,7 @@ from pathlib import Path
 from lupa.lua54 import LuaRuntime
 
 source=(Path(__file__).resolve().parents[1]/"onimusha_mc.lua").read_text(encoding="utf-8-sig")
-fragment=source[source.index("local function reload_config()"):source.index("local function discover()")]
+fragment=source[source.index("local function invalidate_collision_coverage("):source.index("local function discover()")]
 lua=LuaRuntime(unpack_returned_tuples=True)
 run=lua.execute("""
 local cfg,next_config,state

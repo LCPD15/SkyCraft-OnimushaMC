@@ -27,6 +27,9 @@ cases = [
     ({"runtime_stage":"C", "diagnostic_only":"false"}, {"diagnostic_only":True}),
     ({"runtime_stage":"INVALID", "diagnostic_only":False, "install_control_hooks":True},
      {"runtime_stage":"A", "diagnostic_only":True, "install_control_hooks":False}),
+    ({"runtime_stage":"C", "diagnostic_only":False, "camera_yaw_sign":1.0,
+      "camera_yaw_offset":0.0, "camera_pitch_sign":1.0},
+     {"camera_yaw_sign":-1.0, "camera_yaw_offset":180.0, "camera_pitch_sign":-1.0}),
 ]
 for index,(raw,expected) in enumerate(cases,1):
     lua.globals().test_config = lua.table_from(raw)
