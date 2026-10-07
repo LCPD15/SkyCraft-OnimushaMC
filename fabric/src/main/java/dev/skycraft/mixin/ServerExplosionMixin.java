@@ -2,6 +2,8 @@ package dev.skycraft.mixin;
 
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
+import dev.skycraft.combat.NativeExplosionRelay;
 import dev.skycraft.link.Proto;
 import dev.skycraft.link.SkyLink;
 import dev.skycraft.world.SkyDigBlast;
@@ -30,6 +32,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 public abstract class ServerExplosionMixin {
 	@Unique
 	private @Nullable SkyDigBlast skycraft$blast;
+
+	@WrapMethod(method = "explode")
+	private int skycraft$nativeOwnership(Operation<Integer> original) {
+		try (var scope = NativeExplosionRelay.begin((ServerExplosion)(Object)this)) {
+			return original.call();
+		}
+	}
 
 	@Inject(method = "explode", at = @At("HEAD"))
 	private void skycraft$begin(CallbackInfoReturnable<Integer> cir) {
@@ -66,7 +75,7 @@ public abstract class ServerExplosionMixin {
 			this.skycraft$blast.finish();
 			this.skycraft$blast = null;
 		}
-		if (!SkyLink.active()) {
+		if (!SkyLink.active() || NativeExplosionRelay.forwarded()) {
 			return;
 		}
 		ServerExplosion self = (ServerExplosion) (Object) this;

@@ -115,6 +115,11 @@ passed('malformed damage bounds rejected before any native enqueue')
 e,s,b,t=prepare();e.distance=30;tr={flags=2}
 assert(module.queue(t,b,700,tr) and tr.outcome=='queued_native' and e.queues==1 and tr.native_range==128)
 passed('projectile impact outside melee reach reaches native damage with the same shared profiles')
+e,s,b,t=prepare();e.distance=30;tr={flags=8}
+assert(module.queue(t,b,700,tr) and tr.outcome=='queued_native' and tr.native_range==128)
+e,s,b,t=prepare();e.distance=30;tr={flags=4}
+assert(module.queue(t,b,700,tr) and tr.reason=='native_hit_out_of_range' and tr.native_range==10)
+passed('fire bit 8 is indirect; sweep bit 4 retains melee range')
 e,s,b,t=prepare();e.distance=129;tr={flags=2}
 assert(module.queue(t,b,700,tr) and tr.reason=='native_hit_out_of_range' and e.queues==0 and #s.errors==0)
 e,s,b,t=prepare();e.distance=30;tr={flags=0}

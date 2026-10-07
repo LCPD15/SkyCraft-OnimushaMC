@@ -1,47 +1,81 @@
 # 继续测试的停点 / Resume checkpoint
 
-2026-10-07。仅适用于 OnimushaWotS 01.000.001 / TDB82 / REFramework b6baf6b406efc65e077b99cb4d9ad25b0a0a9095。其他 RE 游戏必须另行适配。
+2026-10-07，仅适用于 OnimushaWotS 01.000.001 / TDB82 / REFramework b6baf6b406efc65e077b99cb4d9ad25b0a0a9095。
+其他 RE 游戏需要独立适配。MOD制作：LCPD15/LCPD拉灯。
 
 ## 最新结果与下一步
 
-用户已确认 MC 攻击有原生受击效果；修正通用命中范围后再次确认“扣血和反馈正常，暂时没有打不到的敌人”。不要再要求人工采集每种敌人或每招的模板。普通／特殊攻击两套全局资产随机选用，所有敌人共用入口。
+MC 爆炸桥接已实现。用户确认：“爆炸能正常影响敌人，也能正常销毁方块”。
+已保存第一轮 4 次 TNT 原生生成记录，MC→RE 坐标完全对应；Em104_00、Em106_00 原生受击入口、
+特效、声音调用均有记录，普通命中原生伤害 1500，剩余 HP 不足时正常归零。
+来源 `logs/explosion-probe-20261007/tnt-first-live-*`，完整实现与限制见 ONIMUSHA-EXPLOSION.md。
+当前能力只标记油桶资源/工厂就绪，不把所有战斗边界当作通过。MC 爆炸强度暂不缩放原生范围/伤害。
 
-第一轮原生反馈：8 次 native queue，execFirstDamage、execThirdDamage、applyHitEffect、applyHitSound 各匹配 8 次，目标包括 Em101_00 和 Em101_50；无手动 HP 补扣。第二轮通用受击范围：14 次 native queue，四个观察点各匹配 14 次；Em102_00（悬浮）、Em107_00、Em105_00 均成功扣血／反馈。用户视觉结果通过。日志 bounds-user-confirmed-* 和 native-feedback-confirmed-* 位于 logs/native-enemy-user-failure-20261007/。
+铁傀儡首轮用户结果：近处敌人能被攻击并扣血，但不移动。记录 golem-user-confirmed-*。
+根因：路径查询仍看虚空世界空气块，未读 SkyCollision 地形；已补 MC 路径类型/地面高度/
+目标表面扫描/稳定落脚点，新增3个Java测试，build成功。当前运行E176 JAR仍是旧寻路版本。
 
-第二轮另有 3 次 HIT_PROJECTILE 命中被旧 10 米试验距离拒绝，并非敌人类型过滤。现已改为近战 10 米、带 projectile/fire 标志的已结算命中 128 米（注册范围）；正常越界拒绝不再标记模块失败。新文件已自动重载到 generation 6 / id 5cb46f80c9e54a01b3728349e510c591，接管关闭，模块 ready=true、无错误。
+当前待用户回复：已请用户回安全位置、F10关闭并确认原角色恢复，保持游戏运行。
+用户确认安全后可按既有授权关闭准确验证路径的鬼武者进程，让 MC 保存退出；
+备份世界，再安装 fabric/build/libs 中的寻路候选。不重复发放测试道具。
+然后请用户重启进入场景，连接同一世界复测铁傀儡移动。不要重复提出已经挂起的问题。
 
-**当前待用户回复：** 已请用户 F10 开启，在约十几个方块外用弓箭命中一次，随后回安全位置 F10 关闭，确认原角色／操作恢复。不要重复提出同一测试。收到回复后立即保存主适配器和 enemy_hit 状态，核对 native_distance > 10、native_range=128、queued_native 与实际 HP/反馈；再更新本停点。远程修正尚未标记实景通过。
+当前游戏 PID 76224，MC PID 114676（操作前核实路径，不可仅用旧 PID）。
+MC 世界 OnimushaMC-XYZ-v2，启动 StartHidden/QuitWithHost/SwordBlocking。
+电脑自动输入保持停止，真实游戏操作由用户完成。Shell/文件/已授权进程管理可用。
 
-## 自动重载与部署路径
+## 本轮实现与道具
 
-用户已要求免手动 Reset。项目重载器已首次手动加载，此后 5 次自动重载通过（generation 2–6）。源 onimusha/adapter/onimusha_loader.lua 是唯一项目 autorun；4 个模块位于游戏 reframework/data/onimusha_mc/scripts/。**以后只更新这些 payload，不要重新创建旧 autorun，否则会重复装 hook。**
+只读油桶探针成功记录两个 Gm019_000 连锁爆炸（32事件、无错误）。探针在 combat_inventory payload 内，
+采样已停用；不要让用户重新采样。逻辑 ID 4 → fixed ID 6 →数组索引 4 → shl_g019_000_004 主 shell。
+主 shell 自动创建伤害/效果子 shell；不能把 getShellPackage 的索引误当 fixed ID。
+所有生产对象重新分配/通过当前拥有者解析，不重用采样指针或修改共享资源。
 
-触发：G:/Onimusha_MC_mod/tools/Reload-OnimushaScripts.ps1。先确保用户在安全位置；重载自动关闭接管，等待输入／绘制／FOV 恢复、伤害队列和 hook 离开后切换。无须重新启动游戏或手动 Reset。状态在 onimusha_reload_status.json；匹配请求 id 且 phase=loaded 才是成功。loader 自身或 DLL 更新仍需全框架 Reset／重启，工具不是 REFramework 全局 Reset API。参考 ONIMUSHA-HOT-RELOAD.md。
+现有 DLL 无需改变。flags bit7 表示原生爆炸能力；EV3 的 formId=事件ID、weapon=epoch、flags=1。
+MC 在事件确实入队时抑制该次敌人代理爆炸伤害，避免与原生 AoE 重复；MC 保留自伤与方块破坏。
+原生子 shell `_EnableSelfDamage=false`，以当前玩家为 owner。跨进程最终 ACK 尚未实现；不确定原生失败不重试。
+爆炸占用尾段加入 loader busy 门控，所有新 hook 继续由唯一项目重载器管理。
 
-旧 autorun 和 manifest 已保存在 runtime/test-backups/before-project-loader-20261007-162020/。最近两次 payload 备份 before-damage-bounds-20261007-165523、before-projectile-range-20261007-170137。只读 combat_inventory 控制已关闭。
+测试道具已发放，不要再添加：TNT 3×64、末地水晶64、黑曜石64、打火石1、铁块4×64、雕刻南瓜2×64。
+旧有金苹果4×64也已经发过。新增物品只占空格，原物品和其他 NBT 全部验证不变。
+完整世界备份 runtime/test-backups/before-explosion-golem-20261007-181455（60文件），
+收据 logs/explosion-golem-grant-20261007.json。
 
-## 实现边界
+## 部署与继续工作
 
-原先 Reset 清空临时模板，持久 trial 控制又引用不存在的 [1,2]，原生模块退出并回退直接 HP，造成“扣血但无反馈”。当前 production mode=enabled；从当前玩家拥有的 AttackParamData 解析稳定资产 ID 1/41，并校验 Attack/Rikido/Armor/flags/PercentageDamageType 指纹。每次 createRuntimeParam 生成独立原生参数，Attack=0、FixedAttack=MC伤害×100；目标实体 stockDirectDamage 长重载只调用一次，不额外入队／补扣 HP。任何失败均不能悄悄回退直接血量路径。无需重启后人工播种；热重载后的资产恢复已有实景证据，冷启动／切场景仍待覆盖。
+唯一项目 autorun：reframework/autorun/onimusha_loader.lua。
+四个 payload 在 reframework/data/onimusha_mc/scripts/：main/enemy_hit/guard_probe/combat_inventory。
+禁止重建旧同名 autorun。爆炸生产逻辑封装在 enemy_hit 末尾独立 scope，探针在 combat_inventory 末尾。
+重载工具 G:/Onimusha_MC_mod/tools/Reload-OnimushaScripts.ps1 自动关闭接管、等待恢复和 native busy 清空。
+当前进程是新启动；上个进程最后自动重载 gen11 / 302b3179577c4990a261936684539ebf。
+DLL 和 loader 均未改动，不需手工 Reset。
 
-代理范围读取实际 ColliderSwitcher.TYPE_DAMAGE=0 的活动 RequestSet、启用 collidable 的世界 AABB。RSC 的第一个参数是 group ID，不能传 group 索引。近处 32 格内使用有效受击范围的中心／底部；远处或读不到时回退 CharacterController 并明确记录来源。效果位置和距离校验也使用该范围。没有敌人名字白名单；所有已解析 EnemyCharacter/HealthManager 使用同一流程。当前仍为一个聚合 AABB、默认 BODY 部位，不能宣称已完成精确逐部位、装甲弱点、所有 Boss 阶段或全场景覆盖。
+安装工厂开关 reframework/data/onimusha_explosion_control.json；日志 onimusha_explosion_status.json。
+能力位没有就绪时 MC 保留原代理爆炸命中路线（HIT_EXPLOSION=16），不会假称原生生成成功。
+fire bit=8（此前误4，4是sweep）已经修复。近战10米、projectile/fire/explosion/mob命中128米。
+上一轮弓箭远距离修复仍未独立实测；用户转向爆炸任务，不要宣称已通过。
 
-## 验证、文件与运行状态
+## 验证与剩余范围
 
-20 个 Lua 回归脚本通过，日志 logs/lua-regression-reload-bounds-20261007.txt。此后仅 native_hit 距离分支变化，该专项 16 组通过。bounds 专项 5 组，reload 专项 10 组；离线检查不替代实景。DLL/JAR 本轮未变，不需用户重启。
+Fabric build 通过，58 个 Java 测试通过；22 个 Lua 回归脚本全部通过。
+新增3个Java作用域测试覆盖嵌套爆炸、异常清理、未入队本地结算；Lua覆盖去重、旧会话/非法输入拒绝、
+多个同时TNT、原生不确定结果不重试。真实 TNT/方块破坏已由用户确认。
+末地水晶、密集连锁、自伤精确去重、换场景资源独立加载、铁傀儡结果仍待覆盖。
 
-- DLL SHA256：5291E47D62D33D9ED8B7B95A9B285256C02E509D18115AAA0F6F104401F44931。
-- JAR SHA256：22004EBC1473787436FCD0205EE0A521133B34C8FA055FAF67815EFF40B99A5E。
-- main Lua：D2C8CCEA7F689DD0BF0399D47776C09C1ACA987179B7368C6DB5CF4C9ECFB0CB。
-- enemy Lua：8951D364F7A058139760708D4B5F897EAB817B3495DD745D4E77602AD728B449。
-- 完整磁盘文件清单 runtime/deployment.json；磁盘 hash、加载回执和用户验收应分别记录。
+既有：MC普通/特殊两套全局攻击模板由当前玩家资产ID1/41解析，所有敌人共用，不要求逐敌/逐招采样。
+RSC活动受击范围聚合AABB，默认BODY部位；不能称已完成逐部位、装甲弱点或所有Boss阶段。
+3C、F5、背包、相机UI跟随、持续移动、F10恢复、方块站立/拆除、百分比HP与治疗已通过。
+MC格挡无扣血并有声音已确认；红闪/击退/火花未逐项确认。
 
-项目 G:/Onimusha_MC_mod/source/SkyCraft，分支 onimusha-bridge，fork LCPD15/SkyCraft-OnimushaMC，未推送。用户 MC 目录 junction 指向工作根。游戏 F:/SteamLibrary/steamapps/common/OnimushaWotS。MC 世界 OnimushaMC-XYZ-v2，启动含 SwordBlocking / StartHidden / QuitWithHost。上次 PID 游戏34456 / Java94796；操作前核实实际路径，禁止仅凭旧 PID 杀进程。电脑自动输入保持停止，真实游戏操作由用户完成。
+原生NPC对MC方块的碰撞/寻路、真实RE深度/光照、处决仍未实现；实验碰撞对象创建保持禁用。
+致死奖励、破甲、特殊弹反与跨会话事务 ACK 尚未覆盖。当前 MC 仍用叠加渲染私有深度。
 
-## 仍未完成
+项目 G:/Onimusha_MC_mod/source/SkyCraft，分支 onimusha-bridge，fork LCPD15/SkyCraft-OnimushaMC，未推送。
+源码、下载、编译和备份均在用户指定 MC 工作根；保存本地提交，禁止未经授权向外发送。
 
-3C、F5、背包鼠标、持续移动无闪回、原生场景 UI 转向跟随、F10 恢复、方块站立／拆除、百分比 HP 和 MC 道具双向治疗已通过。用户确认格挡无掉血且有声音、正常受伤掉血；红闪／击退／火花未逐项确认。4×64 普通金苹果已发放且用户确认，不要重复添加。
+## 当前文件指纹
 
-原生 NPC 对 MC 方块的碰撞／寻路、真实 RE 深度／光照、处决仍未实现；实验原生 Collider 创建保持关闭。当前 MC 渲染使用私有几何深度，不能声称已进入原生光照。敌人致死奖励、破甲、特殊不可防御／弹反和跨会话事务 ACK 仍待覆盖。候选透明 DLL FC445 从未安装。
-
-MOD制作：LCPD15/LCPD拉灯
+- DLL: `5291E47D62D33D9ED8B7B95A9B285256C02E509D18115AAA0F6F104401F44931`
+- JAR: `E1763417CF84A215613BDB76FCB1E3E1E00E11E39833FA8B7D3CCE6D48D2FC62`
+- main Lua: `32CCAC46BDD0DB399EC63E9351AAED309B80B2ADC25326A66E10BADED55E6E39`
+- enemy Lua: `7D0B6BB04D8A3DED75FE2FDE3110CBFF0F90B343190846EEC4EBB7B74C11F279`

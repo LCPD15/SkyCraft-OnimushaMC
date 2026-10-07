@@ -118,7 +118,16 @@ public class SkyrimActorEntity extends LivingEntity {
 		if (this.isInvulnerableTo(level, source) || dmg <= 0.0F) {
 			return;
 		}
+		if (source.is(net.minecraft.tags.DamageTypeTags.IS_EXPLOSION)) {
+			// The queued native oil-barrel blast owns RE victims. MC still destroys
+			// blocks and hurts real MC mobs/player; never apply a second proxy hit.
+			if (NativeExplosionRelay.forwarded()) return;
+			this.pendingFlags |= Proto.HIT_EXPLOSION;
+		}
 		this.pendingDamage += dmg;
+		if (source.getEntity() instanceof net.minecraft.world.entity.Mob) {
+			this.pendingFlags |= Proto.HIT_MC_MOB;
+		}
 		if (source.getDirectEntity() instanceof Projectile) {
 			this.pendingFlags |= Proto.HIT_PROJECTILE;
 		}

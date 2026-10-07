@@ -63,6 +63,7 @@ namespace skycraft::proto
 		kSkyHostDead = 1u << 4,            // Onimusha owns death and respawn; MC must not kill it again
 		kSkyNativeTerrainProtected = 1u << 5, // native terrain is never mined; MC blocks remain breakable
 		kSkyMcLook = 1u << 6,             // MC owns yaw/pitch, rather than copying host look each frame
+		kSkyNativeExplosions = 1u << 7,   // captured native shell factory is ready for collisionEpoch
 	};
 
 	// Skyrim's water (lakes, rivers, the sea) around the player, for Minecraft to treat as its own
@@ -275,6 +276,8 @@ namespace skycraft::proto
 		kHitProjectile = 1u << 1,
 		kHitSweep = 1u << 2,
 		kHitFire = 1u << 3,
+		kHitExplosion = 1u << 4,
+		kHitMcMob = 1u << 5,
 	};
 
 	// What landed a kEvHitActor (Skyrim plays that weapon class's impact effect and sounds).

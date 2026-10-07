@@ -491,16 +491,21 @@ public final class SkyLink {
 		pushEvent(type, formId, a, b, c, d, flags, 0);
 	}
 
-	public static synchronized void pushEvent(int type, int formId, float a, float b, float c, float d, int flags, int weapon) {
+	public static void pushEvent(int type, int formId, float a, float b, float c, float d, int flags, int weapon) {
+		tryPushEvent(type, formId, a, b, c, d, flags, weapon);
+	}
+
+	/** False means no ownership transfer: callers must retain their local damage route. */
+	public static synchronized boolean tryPushEvent(int type, int formId, float a, float b, float c, float d, int flags, int weapon) {
 		MemorySegment s = shm;
 		if (s == null) {
-			return;
+			return false;
 		}
 		long base = OFF_EVENT_RING;
 		long head = s.get(JAVA_LONG, base + ER_HEAD);
 		long tail = (long) LONG.getAcquire(s, base + ER_TAIL);
 		if (head - tail >= EVENT_RING_ENTRIES) {
-			return;
+			return false;
 		}
 		long e = base + ER_DATA + (head & (EVENT_RING_ENTRIES - 1)) * EVENT_BYTES;
 		s.set(JAVA_INT, e, type);
@@ -512,6 +517,7 @@ public final class SkyLink {
 		s.set(JAVA_INT, e + 24, flags);
 		s.set(JAVA_INT, e + 28, weapon);
 		LONG.setRelease(s, base + ER_HEAD, head + 1);
+		return true;
 	}
 
 	// ---- world entities (write) ------------------------------------------------------------

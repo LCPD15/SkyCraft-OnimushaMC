@@ -300,10 +300,10 @@ local function queue(entry,bridge_state,damage,trace)
         end
         -- Minecraft already resolves reach/projectile impact. Keep the extra
         -- stale-proxy distance guard, but do not apply a melee limit to arrows.
-        -- HIT_PROJECTILE=2 / HIT_FIRE=4 in the shared protocol; no enemy rules.
+        -- HIT_PROJECTILE=2 / HIT_FIRE=8 in the shared protocol; no enemy rules.
         local flags=trace.flags or 0
         assert(finite(flags) and flags>=0 and flags<=4294967295 and flags==math.floor(flags),'Invalid hit flags')
-        local indirect=(flags & 6)~=0
+        local indirect=(flags & 58)~=0 -- projectile 2, fire 8, explosion 16, MC mob 32
         local max_distance=indirect and 128 or 10
         trace.native_distance=math.sqrt(distance_sq);trace.native_range=max_distance
         if distance_sq>max_distance*max_distance then
@@ -337,7 +337,9 @@ local function queue(entry,bridge_state,damage,trace)
     end
     return true
 end
-_G.onimusha_enemy_hit={queue=queue,busy=function() return next(s.pending)~=nil end}
+_G.onimusha_enemy_hit={queue=queue,busy=function()
+    return next(s.pending)~=nil or (_G.onimusha_explosion and _G.onimusha_explosion.busy())
+end}
 local function tick()
     s.frame=s.frame+1
     if s.frame==1 then initialize() end
@@ -384,3 +386,190 @@ re.on_application_entry('LateUpdateBehavior',function()
     local ok,e=pcall(tick);if not ok then failure('frame',e) end
 end)
 re.on_script_reset(function() s.mode='off';s.templates={};s.pending={};_G.onimusha_enemy_hit=nil end)
+
+-- BEGIN NATIVE EXPLOSION: TDB82 Gm019_000 oil-barrel sample, 2026-10-07.
+-- Separate scope, bundled here so the existing transactional loader owns it.
+do
+local X={frame=0,ready=false,events={},seen={},shells={},mode='off'}
+local BASE='GameDesign/Gimmick/Gm019/Gm019_000/Shell/'
+local SHOOT='shootShell(System.Int32, ace.cShellShootingInfoBase, System.Action`1<ace.ShellBase>)'
+local function xcall(o,n,...) assert(o and o:get_type_definition():get_method(n),'Missing '..n);return o:call(n,...) end
+local function xtyp(o) return o and o:get_type_definition():get_full_name() end
+local function xaddr(o) return o and o:get_address() end
+local function xfinite(n) return type(n)=='number' and n==n and math.abs(n)<math.huge end
+local function xrecord(r)
+    r.frame=X.frame;X.events[#X.events+1]=r;if #X.events>64 then table.remove(X.events,1) end
+end
+local function xscene()
+    return sdk.call_native_func(sdk.get_native_singleton('via.SceneManager'),sdk.find_type_definition('via.SceneManager'),'get_CurrentScene')
+end
+local function xnew(t,ctor,...)
+    local o=assert(sdk.create_instance(t),'Allocate '..t);o:add_ref();xcall(o,ctor,...);return o
+end
+local function xnullable(t,v)
+    local n=ValueType.new(assert(sdk.find_type_definition('System.Nullable`1<'..t..'>')))
+    n:set_field('_HasValue',v~=nil);if v~=nil then n:set_field('_Value',v) end;return n
+end
+local function shooting(position)
+    local info=xnew('app.cShellShootingInfo','.ctor(ace.user_data.ShellCreatorInfoDataBase.ShellCreatorInfoBase)',X.creator)
+    -- Fresh values from the sample; no retained callback, shooting-info or address.
+    xcall(info,'set_StartPos',xnullable('via.vec3',position))
+    xcall(info,'set_TargetPos',xnullable('via.vec3',position))
+    xcall(info,'set_StartRot',xnullable('via.Quaternion',Quaternion.new(0,0,0,1)))
+    xcall(info,'set_StartMoveDir',xnullable('via.vec3',Vector3f.new(0,0,0)))
+    xcall(info,'set_TransformOwner',X.owner)
+    xcall(info,'set_StartTerrainCheckDestroy',true)
+    xcall(info,'set_ShellGroupNo',-1);xcall(info,'set_SwitchIndex',-1);xcall(info,'set_HitGroup',0)
+    assert(info:get_field('OwnerAttachType')==1,'Expected SHOOT_ONLY, not continuous attachment')
+    return info
+end
+local function prepare(player,epoch)
+    assert(sdk.get_tdb_version()==82,'Only Onimusha TDB82')
+    local sc=assert(xscene());local go=xcall(player,'get_GameObject')
+    assert(xcall(go,'get_Valid')==true,'Invalid owner')
+    local key=tostring(xaddr(sc))..':'..tostring(xaddr(go))..':'..tostring(epoch)
+    if X.identity==key and X.controller then return true end
+    X.ready=false;X.controller=nil;X.identity=nil;X.owner=nil;X.seen={};X.shells={}
+    local items=xcall(sc,'findComponents(System.Type)',sdk.find_type_definition('app.Gm019_000'):get_runtime_type()):get_elements()
+    local data
+    for _,gm in ipairs(items) do
+        local mini=gm:get_field('_McGimmickCreateShell')
+        local param=mini and mini:get_field('_Param')
+        local candidate=param and param:get_field('_ShellInfoData')
+        if candidate and xcall(candidate,'get_Path')==BASE..'Gm019_000_ShellCreatorInfo.user' then data=candidate;break end
+    end
+    if not data then
+        data=X.loaded_asset or sdk.create_userdata('ace.user_data.ShellCreatorInfoData',BASE..'Gm019_000_ShellCreatorInfo.user')
+        if data then data:add_ref();X.loaded_asset=data end
+    end
+    assert(data,'Captured oil-barrel asset unavailable')
+    local list=data:get_field('_ShellList')
+    assert(xcall(list,'get_Path')==BASE..'Gm019_000_ShellList.user','Wrong shell list')
+    local creator=xcall(data,'getCreatorInfoWithUniqueID',4)
+    assert(creator and xcall(creator,'get_ShellFixedID')==6 and xcall(creator,'get_OwnerAttachType')==1,'Barrel mapping changed')
+    local function package_by_id(id)
+        -- getShellPackage takes a list INDEX in this build, not the fixed ID.
+        local entries=list:get_field('_DataList');local a=entries:get_field('_items')
+        for i=0,entries:get_field('_size')-1 do
+            local item=a:get_element(i)
+            if item:get_field('_FixedID')==id then return item:get_field('_ShellPackage') end
+        end
+        error('Missing fixed shell ID '..id)
+    end
+    local package=package_by_id(6)
+    assert(package:get_field('_ShellNameHash')==3230905416,'Main shell fingerprint changed')
+    assert(xcall(package:get_field('_MainParam'),'get_Path')==BASE..'shl_g019_000_004/shl_g019_000_004_MainParam.user','Wrong main asset')
+    -- Native explosion owns RE enemy/gimmick hits. The MC host's self damage is
+    -- still computed by MC; both native damaging children exclude their owner.
+    for _,id in ipairs({0,1}) do
+        local pk=package_by_id(id)
+        local entries=pk:get_field('_MainParam'):get_field('_ShellMiniParams')
+        local a=entries:get_field('_items');local found=false
+        for i=0,entries:get_field('_size')-1 do
+            local m=a:get_element(i)
+            if xtyp(m)=='app.cShellminiParamColHit' then
+                assert(m:get_field('_EnableSelfDamage')==false,'Native self-damage would double MC damage');found=true
+            end
+        end
+        assert(found,'Missing native damaging child')
+    end
+    data:add_ref();list:add_ref();creator:add_ref();go:add_ref()
+    local controller=xnew('ace.cShellCreateController','.ctor()')
+    xcall(controller,'setup(via.GameObject)',go)
+    xcall(controller,'registerShellList(ace.user_data.ShellList)',list)
+    X.owner=go;X.controller=controller;X.creator=creator;X.asset=data;X.list=list
+    X.identity=key;X.epoch=epoch
+    shooting(Vector3f.new(0,0,0)) -- preflight constructor/setters only; never fires.
+    X.ready=true;X.error=nil
+    xrecord({kind='prepared',asset=BASE..'Gm019_000_ShellList.user',fixed_id=6,epoch=epoch})
+    return true
+end
+local function refresh(player,epoch)
+    if X.mode~='enabled' then return false end
+    if X.frame%120~=1 and X.last_player==xaddr(player) and X.last_epoch==epoch then return X.ready end
+    X.last_player=xaddr(player);X.last_epoch=epoch
+    local ok,err=pcall(prepare,player,epoch)
+    if not ok then X.ready=false;X.controller=nil;X.identity=nil;X.error=tostring(err):sub(1,700) end
+    return X.ready
+end
+local function queue(event,bridge_state,position)
+    local r={kind='explosion',id=event.form_id,epoch=event.weapon,radius=event.d,
+        mc={x=event.a,y=event.b,z=event.c},native={x=position.x,y=position.y,z=position.z},outcome='rejected'}
+    local attempted=false
+    local ok,err=pcall(function()
+        assert(X.mode=='enabled' and X.ready and bridge_state.active,'Explosion route unavailable')
+        assert(event.weapon==bridge_state.epoch and event.weapon==X.epoch and event.flags==1,'Stale/legacy explosion')
+        assert(xfinite(event.form_id) and event.form_id>0 and event.form_id==math.floor(event.form_id),'Invalid explosion ID')
+        assert(xfinite(event.d) and event.d>0 and event.d<=32,'Unsupported explosion radius')
+        assert(xfinite(position.x) and xfinite(position.y) and xfinite(position.z),'Nonfinite explosion position')
+        local p=bridge_state.transform:get_position()
+        assert((position.x-p.x)^2+(position.y-p.y)^2+(position.z-p.z)^2<=128^2,'Explosion too far from active player')
+        assert(xaddr(xcall(bridge_state.player,'get_GameObject'))==xaddr(X.owner) and xcall(X.owner,'get_Valid')==true,'Owner changed')
+        assert(X.identity==tostring(xaddr(xscene()))..':'..tostring(xaddr(X.owner))..':'..tostring(X.epoch),'Scene changed')
+        assert(not X.seen[event.form_id],'Duplicate explosion ID')
+        local info=shooting(position)
+        -- Mark BEFORE the native call. An ambiguous result must not be retried.
+        X.seen[event.form_id]=X.frame;X.last_shot=X.frame;attempted=true
+        local shell=xcall(X.controller,SHOOT,6,info,nil)
+        assert(shell,'Native shell pool returned no shell')
+        local go=xcall(shell,'get_GameObject')
+        r.name=xcall(go,'get_Name');r.owner=xaddr(xcall(shell,'get_ShellOwner'))
+        local pos=xcall(go,'get_Transform'):get_position();r.spawned={x=pos.x,y=pos.y,z=pos.z}
+        r.outcome='spawned';X.busy_until=X.frame+180
+        xrecord(r)
+    end)
+    if not ok then
+        r.error=tostring(err):sub(1,700);r.outcome=attempted and 'unknown_no_retry' or 'rejected'
+        if attempted then X.ready=false;X.error=r.error;X.busy_until=X.frame+180 end
+        xrecord(r)
+    end
+    return ok
+end
+_G.onimusha_explosion={refresh=refresh,queue=queue,busy=function() return X.frame<(X.busy_until or 0) end}
+local function observe_damage()
+    for _,spec in ipairs({{'app.cEnemyApplyDamage','execFirstDamage'}, {'app.cEnemyApplyDamage','execThirdDamage'},
+        {'app.cCharacterApplyDamage','applyHitEffect'}, {'app.cCharacterApplyDamage','applyHitSound'}}) do
+        local key='onimusha_explosion:'..spec[1]..'.'..spec[2]
+        local method=assert(sdk.find_type_definition(spec[1]):get_method(spec[2]..'(app.cCharacterApplyDamage.cApplyParam)'))
+        sdk.hook(method,function(args)
+            thread.get_hook_storage()[key]=nil
+            if not X.owner or X.frame>=(X.busy_until or 0) then return end
+            local ok,err=pcall(function()
+                if not sdk.is_managed_object(args[3]) then return end
+                local param=sdk.to_managed_object(args[3]);local stock=param:get_field('DamageInfo')
+                if not stock or xaddr(xcall(stock,'get_Attacker'))~=xaddr(X.owner) then return end
+                local attack=xcall(stock,'get_AttackObj')
+                local name=attack and xcall(attack,'get_Name')
+                if type(name)~='string' or not name:match('^shl_g019_000_') then return end
+                local damage=sdk.to_managed_object(args[2]);local owner=xcall(damage,'get_OwnerCharacter')
+                local hp=xcall(xcall(xcall(owner,'get_Context'),'get_Chara'),'get_HealthManager')
+                local r={kind='native_damage',phase=spec[2],shell=name,target=xcall(xcall(owner,'get_GameObject'),'get_Name'),
+                    before=xcall(hp,'get_Health'),health_decrease=param:get_field('HealthDecrease')}
+                thread.get_hook_storage()[key]={r=r,hp=hp}
+            end)
+            if not ok then xrecord({kind='observation_error',error=tostring(err):sub(1,500)}) end
+        end,function(ret)
+            local t=thread.get_hook_storage()[key];thread.get_hook_storage()[key]=nil
+            if t then
+                local ok,hp=pcall(xcall,t.hp,'get_Health');t.r.after=ok and hp or nil;xrecord(t.r)
+            end
+            return ret
+        end)
+    end
+end
+re.on_application_entry('LateUpdateBehavior',function()
+    X.frame=X.frame+1
+    if X.frame==1 then
+        local ok,err=pcall(observe_damage);if not ok then xrecord({kind='observation_setup_error',error=tostring(err)}) end
+    end
+    if X.frame%30==1 then
+        local c=json.load_file('onimusha_explosion_control.json') or {}
+        X.mode=c.enabled==true and 'enabled' or 'off';if X.mode=='off' then X.ready=false end
+        for id,frame in pairs(X.seen) do if X.frame-frame>3600 then X.seen[id]=nil end end
+        json.dump_file('onimusha_explosion_status.json',{frame=X.frame,mode=X.mode,ready=X.ready,error=X.error,
+            epoch=X.epoch,events=X.events,damage_policy='native enemies/gimmicks; MC player and blocks',radius_policy='stock oil barrel'})
+    end
+end)
+re.on_script_reset(function() X.ready=false;X.mode='off';X.controller=nil;X.owner=nil;_G.onimusha_explosion=nil end)
+end
+-- END NATIVE EXPLOSION

@@ -1813,6 +1813,10 @@ local function publish_actors(s,bridge)
 end
 local function apply_events(bridge)
     for _,event in ipairs(bridge.drain_events() or {}) do
+        if event.type==3 and _G.onimusha_explosion
+            and finite_camera_number(event.a) and finite_camera_number(event.b) and finite_camera_number(event.c) then
+            _G.onimusha_explosion.queue(event,state,repos(event.a,event.b,event.c))
+        end
         local trace
         if event.type==1 or event.type==6 then
             trace=combat_record("events",{type=event.type,group=event.type==6 and "health_changes" or "enemy_hits",
@@ -2162,7 +2166,9 @@ local function tick()
     -- Damage hooks fail open to native damage if an MC mitigation event cannot
     -- be queued; observed hook counters remain separate runtime evidence.
     bridge.set_camera({binding_ready=state.camera_transform~=nil,valid=false})
+    local explosions_ready=_G.onimusha_explosion and _G.onimusha_explosion.refresh(state.player,state.epoch)
     bridge.submit_host({ready=host_bootstrap_ready,menu=menu or false,loading=not call(state.pm,"isPlayerReady",false),
+        flags=explosions_ready and 128 or 0,
         x=m.x,y=m.y,z=m.z,yaw=host_angles.yaw,pitch=host_angles.pitch,world_id=state.world_id,epoch=state.epoch,teleport_seq=state.teleport_seq,
         health_current=current or 0,health_max=maximum or 0,health_revision=state.health_revision,
         units_per_block=cfg.units_per_block})

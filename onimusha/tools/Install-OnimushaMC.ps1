@@ -28,6 +28,7 @@ if ($ProbeOnly) {
         $taskEntries += @{Source=(Join-Path $taskRepo ('onimusha\adapter\'+$taskPayload)); Relative=('reframework\data\onimusha_mc\scripts\'+$taskPayload)}
     }
     $taskEntries += @{Source=(Join-Path $taskRepo 'onimusha\config\onimusha_enemy_hit_control.json'); Relative='reframework\data\onimusha_enemy_hit_control.json'}
+    $taskEntries += @{Source=(Join-Path $taskRepo 'onimusha\config\onimusha_explosion_control.json'); Relative='reframework\data\onimusha_explosion_control.json'}
     if ($IncludeExperimentalColliderAsset) {
         $taskEntries += @{Source=(Join-Path $taskRepo 'onimusha\assets\natives\stm\mod\onimusha_mc\unit_box.rcol.37'); Relative='natives\stm\mod\onimusha_mc\unit_box.rcol.37'}
     }

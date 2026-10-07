@@ -91,6 +91,8 @@ public final class Proto {
 	public static final int HIT_PROJECTILE = 1 << 1;
 	public static final int HIT_SWEEP = 1 << 2;
 	public static final int HIT_FIRE = 1 << 3;
+	public static final int HIT_EXPLOSION = 1 << 4;
+	public static final int HIT_MC_MOB = 1 << 5;
 	public static final int WEAPON_UNARMED = 0;
 	public static final int WEAPON_BLADE = 1;
 	public static final int WEAPON_AXE = 2;
@@ -170,6 +172,8 @@ public final class Proto {
 	public static final int SKY_HOST_DEAD = 1 << 4;
 	public static final int SKY_NATIVE_TERRAIN_PROTECTED = 1 << 5;
 	public static final int SKY_MC_LOOK = 1 << 6;
+	/** Onimusha has resolved the captured native oil-barrel shell factory for this epoch. */
+	public static final int SKY_NATIVE_EXPLOSIONS = 1 << 7;
 
 	// McState (relative to OFF_MC_STATE)
 	public static final long MS_SEQ = 0x00;
