@@ -2,8 +2,7 @@
 from pathlib import Path
 from lupa.lua54 import LuaRuntime
 src=(Path(__file__).resolve().parents[1]/'onimusha_combat_inventory.lua').read_text(encoding='utf-8-sig')
-probe=src[src.index("do\nlocal CONTROL='onimusha_explosion_probe_control.json'"):]
-probe=probe.replace('-- END EXPLOSION PROBE', '')
+probe=src[src.index("do\nlocal CONTROL='onimusha_explosion_probe_control.json'"):src.index('-- END EXPLOSION PROBE')]
 probe=probe.rsplit('\nend',1)[0]+"\n_G.probe_test={state=e,tick=tick,plans=plans}\nend\n"
 lua=LuaRuntime(unpack_returned_tuples=True)
 lua.execute(r"""

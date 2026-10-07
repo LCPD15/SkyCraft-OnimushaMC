@@ -1,4 +1,5 @@
--- Read-only, bounded combat asset / collider inspection. Onimusha TDB82 only.
+-- Bounded combat inspection and explicitly requested isolated native-object probe.
+-- Onimusha TDB82 only. The inventory/explosion observation scopes are read-only.
 -- The control file can select owned fields/array entries, never arbitrary calls.
 -- MOD制作：LCPD15/LCPD拉灯
 local CONTROL='onimusha_combat_inventory_control.json'
@@ -7,7 +8,9 @@ local state={frame=0,metadata={}}
 local function typ(o) return o and o:get_type_definition():get_full_name() end
 local function call(o,n,...)
     assert(o and o:get_type_definition():get_method(n),'Missing getter '..n)
-    return o:call(n,...)
+    local ok,result=pcall(o.call,o,n,...)
+    if not ok then error(typ(o)..'.'..n..': '..tostring(result),0) end
+    return result
 end
 local function fields(o)
     local result={};local td=o:get_type_definition()
@@ -100,12 +103,133 @@ local function colliders(enemy)
     end
     return out
 end
+local function engine_inspect(c,scene,player)
+    local out={id=c.id,frame=state.frame,scene=snapshot(scene,0,{}),components={},errors={}}
+    local origin=call(call(player,'get_GameObject'),'get_Transform'):get_position()
+    local function read(o,name,...)
+        local ok,v=pcall(call,o,name,...)
+        if not ok then return {unavailable=tostring(v):sub(1,160)} end
+        local r=snapshot(v,(v and (type(v)=='userdata' or type(v)=='table') and v.get_type_definition and v:get_type_definition():is_value_type()) and 2 or 0,{})
+        if v and (type(v)=='userdata' or type(v)=='table') and v.get_type_definition then
+            if v:get_type_definition():get_method('get_ResourcePath') then
+                local yes,path=pcall(call,v,'get_ResourcePath');if yes then r.resource_path=path end
+            end
+        end
+        return r
+    end
+    local function describe_go(go)
+        local folder=call(go,'get_Folder')
+        local r={object=snapshot(go,0,{}),name=call(go,'get_Name'),valid=call(go,'get_Valid'),update=read(go,'get_Update'),draw=read(go,'get_Draw'),
+            position=snapshot(call(go,'get_Transform'):get_position(),0,{}),folder=snapshot(folder,0,{})}
+        if folder then
+            r.folder.name=read(folder,'get_Name');r.folder.path=read(folder,'get_Path')
+            r.folder.active=read(folder,'get_Active');r.folder.ready=read(folder,'get_Ready')
+        end
+        r.components={}
+        for i,v in ipairs(call(go,'get_Components'):get_elements()) do
+            if i>40 then break end;r.components[#r.components+1]=snapshot(v,0,{})
+        end
+        return r
+    end
+    local function owner(o) return describe_go(call(o,'get_GameObject')) end
+    local function details(o,getters)
+        if not o then return end
+        local r={object=snapshot(o,0,{}),getters={}}
+        for _,n in ipairs(getters) do r.getters[n]=read(o,n) end
+        return r
+    end
+    local function collider(o)
+        return {object=snapshot(o,0,{}),ready=read(o,'get_Ready'),enabled=read(o,'get_Enabled'),filter_resource=read(o,'get_CollisionFilterResource'),shape=read(o,'get_Shape'),
+            filter=details(call(o,'get_FilterInfo'),{'get_Layer','get_Group','get_SubGroup','get_IgnoreSubGroup','get_MaskBits'}),owner=read(o,'get_GameObject'),bounds=read(o,'get_BoundingAabb')}
+    end
+    out.player=owner(player)
+    local pc=call(call(player,'get_GameObject'),'getComponent(System.Type)',sdk.find_type_definition('via.physics.CharacterController'):get_runtime_type())
+    local floor=pc and call(pc,'get_FloorGameObject')
+    if floor then
+        out.floor=describe_go(floor);out.floor.physics={}
+        for _,o in ipairs(call(floor,'get_Components'):get_elements()) do
+            if o:get_type_definition():is_a('via.physics.Colliders') then
+                local n=call(o,'getCollidersCount');local item={object=snapshot(o,0,{}),count=n,colliders={}};out.floor.physics[#out.floor.physics+1]=item
+                for j=0,math.min(n,4)-1 do item.colliders[#item.colliders+1]=collider(call(o,'getCollider(System.UInt32)',j)) end
+            end
+        end
+    end
+    local plans={
+        {'via.physics.ColliderSet',{'get_Ready','get_Static','get_Resource','get_CollidersCount'}},
+        {'via.physics.RequestSetCollider',{'get_NumRequestSetGroups','get_NumRegisteredRequestSetIds','get_NumExecuteWorkers'}},
+        {'via.render.Mesh',{'getMesh','get_Material','get_MeshReady','get_MaterialReady','get_Enabled','get_StaticMesh','get_DrawShadowCast','get_RenderOutputID'}},
+        {'via.physics.Colliders',{'get_Ready','get_Static','get_Enabled','getCollidersCount','get_BoundingAabb'}},
+        {'via.dynamics.RigidBodySet',{'get_Ready','get_Enabled','get_Resource'}},
+        {'via.navigation.AIMapEffector',{'getEffectType','getShapeType','get_MapName','getMapNamesCount','get_Enabled','get_Fixed','get_AddEdge','get_Affected','get_ResourceAttributeBits','get_ExtraLinkConnected','get_Shape'}}, {'via.navigation.AIMap',{}},
+        {'via.render.Light',{}}, {'via.physics.CharacterController',{'get_FilterInfo','get_FilterResource','get_Height','get_Radius','get_Ground'}}}
+    for _,plan in ipairs(plans) do
+        local name=plan[1];local result={type=name,items={}};out.components[#out.components+1]=result
+        coroutine.yield()
+        local ok,err=pcall(function()
+            local t=assert(sdk.find_type_definition(name),'Type unavailable');metadata(t)
+            local found=call(scene,'findComponents(System.Type)',t:get_runtime_type()):get_elements()
+            result.count=#found;local nearby={}
+            for i,o in ipairs(found) do
+                if i%64==0 then coroutine.yield() end
+                if i>16384 then result.scan_truncated=true;break end
+                local go=call(o,'get_GameObject')
+                if go and call(go,'get_Valid') and (c.active~=true or call(go,'get_Update') or call(go,'get_Draw'))
+                    and (name~='via.render.Mesh' or c.static_mesh~=true or call(o,'get_StaticMesh')) then
+                    local p=call(go,'get_Transform'):get_position()
+                    nearby[#nearby+1]={o=o,d=(p.x-origin.x)^2+(p.y-origin.y)^2+(p.z-origin.z)^2}
+                end
+            end
+            table.sort(nearby,function(a,b) return a.d<b.d end)
+            for i,item in ipairs(nearby) do
+                if i>6 then break end
+                local o=item.o;local r={object=snapshot(o,name:find('navigation',1,true) and 1 or 0,{}),distance=math.sqrt(item.d),owner=owner(o),getters={}}
+                result.items[#result.items+1]=r
+                for _,getter in ipairs(plan[2]) do r.getters[getter]=read(o,getter) end
+                if name=='via.physics.ColliderSet' and r.getters.get_Ready==true and r.getters.get_CollidersCount>0 then
+                    r.collider=collider(call(o,'getCollider(System.UInt32)',0))
+                elseif name=='via.physics.Colliders' then
+                    r.colliders={};local num=call(o,'getCollidersCount');assert(num<=1024)
+                    for j=0,math.min(num,4)-1 do r.colliders[#r.colliders+1]=collider(call(o,'getCollider(System.UInt32)',j)) end
+                elseif name=='via.navigation.AIMapEffector' then
+                    r.shape=details(call(o,'get_Shape'),{'get_Shape','get_BoundingOBB','get_BoundingOBBType'})
+                    r.map_names={};local num=call(o,'getMapNamesCount');assert(num<=64)
+                    for j=0,num-1 do r.map_names[#r.map_names+1]=call(o,'getMapNames(System.UInt32)',j) end
+                elseif name=='via.physics.RequestSetCollider' then
+                    r.groups={};local count=call(o,'getRequestSetGroupsCount');assert(count<=32)
+                    for index=0,count-1 do
+                        if index>=4 then break end
+                        local g=call(o,'getRequestSetGroups(System.UInt32)',index)
+                        local row={index=index,id=call(g,'get_Id'),initialized=call(g,'get_Initialized'),resource=read(g,'get_Resource'),sets={}}
+                        r.groups[#r.groups+1]=row
+                        if row.initialized then
+                            local num=call(g,'get_NumRequestSets');assert(num<=512);row.count=num
+                            for j=0,math.min(num,2)-1 do
+                                local id=call(g,'getRequestSetIdFromIndex(System.UInt32)',j)
+                                row.sets[#row.sets+1]={index=j,id=id,registered=call(o,'isRegisteredRequestSet(System.UInt32, System.UInt32)',row.id,id)}
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+        if not ok then result.error=tostring(err):sub(1,240) end
+    end
+    for i,name in ipairs(c.types or {}) do
+        if i>32 then break end
+        local t=sdk.find_type_definition(name);if t then metadata(t) else out.errors[#out.errors+1]='Missing type '..name end
+    end
+    out.metadata=state.metadata;out.complete=true;return out
+end
 local function inspect(c)
     assert(sdk.get_tdb_version()==82,'Only TDB82')
     assert(_G.onimusha_mc and _G.onimusha_mc.status().enabled==false,'Keep takeover disabled')
     local pm=sdk.get_managed_singleton('app.PlayerManager')
     assert(call(pm,'isPlayerReady',false)==true,'Player unavailable')
     local player=call(call(pm,'getControllingPlayerInfo'),'get_Character')
+    if c.engine==true then
+        local scene=sdk.call_native_func(sdk.get_native_singleton('via.SceneManager'),sdk.find_type_definition('via.SceneManager'),'get_CurrentScene')
+        return engine_inspect(c,scene,player)
+    end
     local entity=call(call(player,'get_CharacterEntityHolder'),'get_Entity')
     local supporter=call(entity,'get_AttackParamSupporter')
     local scene=sdk.call_native_func(sdk.get_native_singleton('via.SceneManager'),sdk.find_type_definition('via.SceneManager'),'get_CurrentScene')
@@ -168,10 +292,36 @@ local function inspect(c)
     return result
 end
 re.on_application_entry('LateUpdateBehavior',function()
-    state.frame=state.frame+1;if state.frame%60~=1 then return end
+    state.frame=state.frame+1
+    if state.engine_job then
+        local job=state.engine_job
+        local safe,reason=pcall(function()
+            assert(_G.onimusha_mc and _G.onimusha_mc.status().enabled==false,'Takeover enabled during probe')
+            local pm=sdk.get_managed_singleton('app.PlayerManager')
+            assert(call(pm,'isPlayerReady',false)==true,'Player unavailable during probe')
+            local scene=sdk.call_native_func(sdk.get_native_singleton('via.SceneManager'),sdk.find_type_definition('via.SceneManager'),'get_CurrentScene')
+            assert(scene and scene:get_address()==job.scene,'Scene changed during probe')
+        end)
+        if not safe then
+            state.engine_job=nil;json.dump_file(OUTPUT,{id=job.id,error=tostring(reason),complete=false});return
+        end
+        local ok,result=coroutine.resume(job.co)
+        if not ok or coroutine.status(job.co)=='dead' then
+            state.engine_job=nil
+            json.dump_file(OUTPUT,ok and result or {id=job.id,error=tostring(result),complete=false})
+        end
+        return
+    end
+    if state.frame%60~=1 then return end
     local c=json.load_file(CONTROL)
     if not c or type(c.id)~='string' or c.id==state.done or c.enabled~=true then return end
     state.done=c.id;state.metadata={}
+    if c.engine==true then
+        local scene=sdk.call_native_func(sdk.get_native_singleton('via.SceneManager'),sdk.find_type_definition('via.SceneManager'),'get_CurrentScene')
+        if not scene then json.dump_file(OUTPUT,{id=c.id,error='No scene',complete=false});return end
+        state.engine_job={id=c.id,scene=scene:get_address(),co=coroutine.create(function() return inspect(c) end)}
+        json.dump_file(OUTPUT,{id=c.id,status='scanning',complete=false});return
+    end
     local ok,result=pcall(inspect,c)
     json.dump_file(OUTPUT,ok and result or {id=c.id,frame=state.frame,error=tostring(result),complete=false})
 end)
@@ -408,3 +558,217 @@ end)
 re.on_script_reset(function() e.armed=false;e.targets={};e.gos={};e.owners={};e.shells={};e.shellgos={} end)
 end
 -- END EXPLOSION PROBE
+
+-- BEGIN NATIVE OBJECT PROBE: explicit single-object experiment, TDB82 only.
+-- Navigation creation/hasEffectNodes are quarantined after the 2026-10-07 crash.
+-- Resource and holder ownership follows REFramework's REResource API.
+-- No gameplay object is edited; no physics allocator/global setting is enabled.
+do
+local CONTROL='onimusha_native_object_probe_control.json'
+local OUTPUT='onimusha_native_object_probe_status.json'
+local q={frame=0,phase='idle',retired={}}
+local function scene_now()
+    return sdk.call_native_func(sdk.get_native_singleton('via.SceneManager'),sdk.find_type_definition('via.SceneManager'),'get_CurrentScene')
+end
+local function report()
+    local r={id=q.id,frame=q.frame,phase=q.phase,error=q.error,position=q.position,
+        scene=q.scene_address,object_name=q.name,ground=q.ground,ready=q.ready,destroyed=q.destroyed,
+        collision=q.collision,action=q.action}
+    if q.prefab then r.prefab_ready=call(q.prefab,'get_Ready') end
+    if q.go and call(q.go,'get_Valid') then
+        r.owner={address=q.go:get_address(),valid=true,draw=call(q.go,'get_Draw'),update=call(q.go,'get_Update'),
+            folder=call(call(q.go,'get_Folder'),'get_Path')}
+        if q.mesh then
+            r.mesh={ready=call(q.mesh,'get_MeshReady'),material_ready=call(q.mesh,'get_MaterialReady'),
+                enabled=call(q.mesh,'get_Enabled'),materials=call(q.mesh,'get_MaterialNum'),
+                output=call(q.mesh,'get_RenderOutputID'),shadow=call(q.mesh,'get_DrawShadowCast'),
+                bounds=snapshot(call(q.mesh,'get_WorldAABB'),2,{})}
+        end
+    end
+    json.dump_file(OUTPUT,r)
+end
+local function cleanup(reason)
+    if q.go then
+        if call(q.go,'get_Valid') then
+            if q.colliders then call(q.colliders,'set_Enabled',false) end
+            if q.mesh then call(q.mesh,'set_Enabled',false) end
+            call(q.go,'set_DrawSelf',false)
+            sdk.find_type_definition('via.GameObject'):get_method('destroy(via.GameObject)'):call(nil,q.go)
+        end
+        -- Keep wrappers until engine deferred destruction has completed.
+        q.retired[#q.retired+1]={frame=q.frame,go=q.go,mesh=q.mesh,colliders=q.colliders,collider=q.collider,
+            prefab=q.prefab,loader=q.loader,mesh_holder=q.mesh_holder,material_holder=q.material_holder}
+    elseif q.prefab then
+        call(q.prefab,'set_Standby',false)
+    end
+    q.go=nil;q.mesh=nil;q.colliders=nil;q.collider=nil;q.prefab=nil;q.loader=nil;q.folder=nil;q.cc=nil
+    q.mesh_holder=nil;q.material_holder=nil;q.phase=reason or 'removed';q.destroyed=#q.retired==0
+    q.ray_query=nil;q.ray_result=nil
+end
+local function resource_holder(resource_type,holder_type,path)
+    local resource=assert(sdk.create_resource(resource_type,path),'Resource allocation failed: '..resource_type)
+    resource:add_ref()
+    local ok,holder=pcall(function() return assert(resource:create_holder(holder_type),'Holder unavailable'):add_ref() end)
+    resource:release()
+    if not ok then error(holder) end
+    return holder
+end
+local function ground_query(player)
+    local cc=call(call(player,'get_GameObject'),'getComponent(System.Type)',sdk.find_type_definition('via.physics.CharacterController'):get_runtime_type())
+    local p=call(call(player,'get_GameObject'),'get_Transform'):get_position()
+    local query=assert(sdk.create_instance('via.physics.GetAreaPrimitiveQuery')):add_ref()
+    local box=ValueType.new(sdk.find_type_definition('via.AABB'))
+    box:set_field('minpos',Vector3f.new(p.x-3,p.y-1,p.z-3));box:set_field('maxpos',Vector3f.new(p.x+3,p.y+1,p.z+3))
+    call(query,'set_Area',box);call(query,'set_FilterInfo',call(cc,'get_FilterInfo'))
+    local result=assert(sdk.call_native_func(sdk.get_native_singleton('via.physics.System'),sdk.find_type_definition('via.physics.System'),'getAreaPrimitive',query)):add_ref()
+    local n=call(result,'get_NumTriangles');local out={triangles=n,colliders={}};local seen={}
+    for i=0,math.min(n,32)-1 do
+        local col=call(result,'getTriangleCollidable(System.UInt32)',i)
+        if col and not seen[col:get_address()] then
+            seen[col:get_address()]=true
+            local f=call(col,'get_FilterInfo');local filter={}
+            for _,field in ipairs({'Layer','Group','SubGroup','IgnoreSubGroup','MaskBits'}) do filter[field]=call(f,'get_'..field) end
+            local cr=call(col,'get_CollisionFilterResource');local go=call(col,'get_GameObject')
+            out.colliders[#out.colliders+1]={type=typ(col),filter=filter,filter_resource=cr and call(cr,'get_ResourcePath'),
+                owner=go and call(go,'get_Name'),shape=typ(call(col,'get_Shape'))}
+        end
+    end
+    q.query=query;q.query_result=result
+    return out
+end
+local function attach_mesh()
+    call(q.go,'set_DrawSelf',false)
+    q.mesh=assert(call(q.go,'createComponent(System.Type)',sdk.find_type_definition('via.render.Mesh'):get_runtime_type())):add_ref()
+    call(q.mesh,'set_Enabled',false);call(q.mesh,'set_StaticMesh',false)
+    call(q.mesh,'setMesh',q.mesh_holder);call(q.mesh,'set_Material',q.material_holder)
+    call(q.mesh,'set_RenderOutputID',31);call(q.mesh,'set_DrawShadowCast',true)
+    q.phase='loading';q.object_start=q.frame
+end
+local function verify_collision()
+    assert(call(q.colliders,'getCollidersCount')==1,'Unexpected collider count')
+    if not call(q.colliders,'get_Ready') then return false end
+    q.collider=q.collider or assert(call(q.colliders,'getCollider(System.UInt32)',0)):add_ref()
+    assert(typ(call(q.collider,'get_Shape'))=='via.physics.BoxShape','Wrong native shape')
+    local owner=assert(call(q.collider,'get_GameObject'))
+    assert(owner:get_address()==q.go:get_address(),'Collider belongs to another object')
+    local query=assert(sdk.create_instance('via.physics.CastRayQuery')):add_ref()
+    call(query,'copyFilterInfo',call(q.cc,'get_FilterInfo'))
+    call(query,'enableAllHits');call(query,'enableNearSort')
+    local p=q.position
+    call(query,'setRay(via.vec3, via.vec3)',Vector3f.new(p.x-2,p.y,p.z),Vector3f.new(p.x+2,p.y,p.z))
+    local result=assert(sdk.call_native_func(sdk.get_native_singleton('via.physics.System'),sdk.find_type_definition('via.physics.System'),'castRay',query)):add_ref()
+    q.ray_query=query;q.ray_result=result
+    local count=call(result,'get_NumContactPoints');assert(count>=0 and count<=256,'Unexpected ray contact count')
+    local found=false
+    for i=0,count-1 do
+        local hit=call(result,'getContactCollidable(System.UInt32)',i)
+        if hit and hit:get_address()==q.collider:get_address() then found=true end
+    end
+    local filters={}
+    for name,obj in pairs({player=q.cc,cube=q.collider}) do
+        local fi=call(obj,'get_FilterInfo');local v={}
+        for _,key in ipairs({'Layer','Group','SubGroup','IgnoreSubGroup','MaskBits'}) do v[key]=call(fi,'get_'..key) end
+        filters[name]=v
+    end
+    q.collision={registered=found,contacts=count,collider_address=q.collider:get_address(),owner_address=owner:get_address(),
+        filters=filters,enabled=call(q.colliders,'get_Enabled'),collider_enabled=call(q.collider,'get_Enabled'),
+        ray=snapshot(call(query,'get_Ray'),2,{}),ray_distance=call(query,'get_RayDistance'),
+        ray_finished=call(result,'get_Finished'),
+        owner_update=call(q.go,'get_Update'),owner_draw=call(q.go,'get_Draw'),
+        ready=call(q.collider,'get_Ready'),layer=call(call(q.collider,'get_FilterInfo'),'get_Layer'),
+        bounds=snapshot(call(q.colliders,'get_BoundingAabb'),2,{})}
+    return found
+end
+local function start(c)
+    assert(sdk.get_tdb_version()==82,'Only TDB82')
+    assert(_G.onimusha_mc and _G.onimusha_mc.status().enabled==false,'Keep takeover disabled')
+    assert(#q.retired==0 and not q.go and not q.prefab and not q.loader,'Previous probe is still retiring')
+    local pm=sdk.get_managed_singleton('app.PlayerManager');assert(call(pm,'isPlayerReady',false))
+    local player=call(call(pm,'getControllingPlayerInfo'),'get_Character')
+    local go=call(player,'get_GameObject');local sc=assert(scene_now());local folder=assert(call(go,'get_Folder'))
+    q.ground=ground_query(player)
+    q.phase='ground_read';report()
+    if c.action=='inspect_ground' then return end
+    assert(c.action=='render_cube' or c.action=='physics_cube','Unsupported probe action')
+    local p=call(go,'get_Transform'):get_position()
+    q.position={x=p.x+3,y=p.y+0.55,z=p.z+3};q.name='OMC_NativeProbe_'..c.id
+    q.scene_address=sc:get_address();q.start=q.frame;q.ready=false;q.destroyed=false;q.collision=nil;q.action=c.action
+    local stem=c.action~='render_cube' and 'mc_stone_cube' or 'unit_cube'
+    q.mesh_holder=resource_holder('via.render.MeshResource','via.render.MeshResourceHolder','mod/onimusha_mc/probe/'..stem..'.mesh')
+    q.material_holder=resource_holder('via.render.MeshMaterialResource','via.render.MeshMaterialResourceHolder','mod/onimusha_mc/probe/'..stem..'.mdf2')
+    if c.action~='render_cube' then
+        -- sdk.deserialize cannot resolve its native entry on this game build.
+        -- Load our private inert UserData holder through the resource system.
+        -- Native prefab instantiation owns registration of its Colliders.
+        q.prefab_stem='unit_collision'
+        q.loader=assert(sdk.create_userdata('app.user_data.AmuletPrefabHolder','mod/onimusha_mc/probe/'..q.prefab_stem..'_loader.user'),'UserData load failed'):add_ref()
+        assert(typ(q.loader)=='app.user_data.AmuletPrefabHolder','Wrong loader type')
+        q.folder=folder:add_ref()
+        q.cc=assert(call(go,'getComponent(System.Type)',sdk.find_type_definition('via.physics.CharacterController'):get_runtime_type())):add_ref()
+        q.phase='loading_userdata'
+    else
+        q.go=assert(sdk.find_type_definition('via.GameObject'):get_method('create(System.String, via.Folder)'):call(nil,q.name,folder)):add_ref()
+        call(q.go,'get_Transform'):set_position(Vector4f.new(q.position.x,q.position.y,q.position.z,1),false)
+        attach_mesh()
+    end
+    report()
+end
+re.on_application_entry('LateUpdateBehavior',function()
+    q.frame=q.frame+1
+    local ok,err=pcall(function()
+        for i=#q.retired,1,-1 do
+            if q.frame-q.retired[i].frame>10 and not call(q.retired[i].go,'get_Valid') then
+                if q.retired[i].prefab then call(q.retired[i].prefab,'set_Standby',false) end
+                table.remove(q.retired,i);q.destroyed=true;report()
+            end
+        end
+        if q.go or q.prefab or q.loader then
+            local sc=scene_now()
+            if not sc or sc:get_address()~=q.scene_address or (_G.onimusha_mc and _G.onimusha_mc.status().enabled)
+                or q.frame-q.start>18000 then cleanup('removed_guard');report();return end
+            if q.phase=='loading_userdata' then
+                local prefab=q.loader:get_field('_BeadsPrefab')
+                if prefab then
+                    q.prefab=prefab:add_ref();assert(typ(q.prefab)=='via.Prefab','Wrong descriptor type')
+                    assert(call(q.prefab,'get_Path')=='mod/onimusha_mc/probe/'..q.prefab_stem..'.pfb','Wrong prefab path')
+                    call(q.prefab,'set_Standby',true);q.phase='loading_prefab'
+                elseif q.frame-q.start>600 then error('UserData has not loaded its prefab descriptor') end
+            end
+            if q.phase=='loading_prefab' then
+                if call(q.prefab,'get_Ready') then
+                    local p=q.position
+                    q.go=assert(call(q.prefab,'instantiate(via.vec3, via.Folder)',Vector3f.new(p.x,p.y,p.z),q.folder),'Prefab instantiation failed'):add_ref()
+                    call(q.go,'set_Name',q.name)
+                    q.colliders=assert(call(q.go,'getComponent(System.Type)',sdk.find_type_definition('via.physics.Colliders'):get_runtime_type()),'Prefab has no Colliders'):add_ref()
+                    attach_mesh()
+                elseif q.frame-q.start>600 then error('Prefab did not become ready') end
+            end
+        end
+        if q.go then
+            if not call(q.go,'get_Valid') then cleanup('removed_invalid');report();return end
+            if q.phase=='loading' then
+                if call(q.mesh,'get_MeshReady') and call(q.mesh,'get_MaterialReady') then
+                    assert(call(q.mesh,'get_MaterialNum')==1,'Unexpected material count')
+                    call(q.mesh,'set_Enabled',true);call(q.go,'set_DrawSelf',true)
+                    q.phase=q.colliders and 'checking_collision' or 'visible';q.ready=not q.colliders;report()
+                elseif q.frame-q.start>600 then error('Native resources did not become ready') end
+            end
+            if q.phase=='checking_collision' and q.frame-q.object_start>=6 and q.frame%30==0 then
+                if verify_collision() then q.phase='visible_collision_verified';q.ready=true;report()
+                elseif q.frame-q.object_start>3600 then error('Identity ray did not hit the prefab collider') end
+            end
+        end
+        if q.frame%30~=1 then return end
+        local c=json.load_file(CONTROL)
+        if c and c.enabled==true and type(c.id)=='string' and c.id~=q.id then
+            q.id=c.id;q.error=nil
+            if c.action=='remove' then cleanup('removed');report()
+            else start(c) end
+        end
+        if q.go or q.prefab or q.loader then report() end
+    end)
+    if not ok then q.error=tostring(err);pcall(cleanup,'failed');pcall(report) end
+end)
+re.on_script_reset(function() pcall(cleanup,'reset_removed');pcall(report) end)
+end
+-- END NATIVE OBJECT PROBE

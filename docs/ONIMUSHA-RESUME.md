@@ -5,31 +5,45 @@
 
 ## 最新结果与下一步
 
-用户已确认铁傀儡能正常站立和寻路，原先13/14边界不再闪断。
-另一处接管中断已定位：同一stage:0:area:13、同一epoch，没有Stage transition，
-14次地形转换超过1200万次工作上限，4次角色走出旧覆盖。不要再把这次失败归因于AreaID。
-已用只读原生查询捕获故障位置3494面及完整格边界5107面；旧算法离线均复现失败。
-详见 ONIMUSHA-DYNAMIC-TERRAIN.md。另2次Waiting for Minecraft world短暂状态未单独定位。
+动态地形用户已实测连续走上百米，只有一次闪断；用户明确要求暂不处理这一次，继续剩余工作。
+不要重新展开该闪断排查。不要模拟键鼠输入，实际游戏操作由用户完成。
 
-新版：完整8格查询边界+0.002格halo，保留旧完整覆盖直到新批次消费确认；
-表面体素转换降低无效工作量，保持原有工作上限，新增数值副本后台线程。
-票据/发布/消费三阶段分开，epoch/PID/generation改变时丢弃后台旧结果。
-3组原生CTest通过，23个Lua回归通过（两个旧边界断言已更新并复测）。
-真实两份地形重放全部成功。游戏内跨区域路线尚待用户验收，不宣布已完全解决。
-Fabric JAR未改动，不需重复铁傀儡建造道具发放或区域13/14迁移。
+本轮原生石头单方块已由用户验证：MC贴图、光照、遮挡正确，阻挡原角色，删除后碰撞清除。
+重启后用户另测普通敌人追逐，确认敌人被石头方块挡住；主动绕路尚未通过。
+生产MC世界仍使用叠加绘制，原生方块同步尚未接入。
+详见 [原生物体实验](ONIMUSHA-NATIVE-OBJECT-PROBE.md)。
 
-20:00已按既有授权关闭游戏，MC正常保存退出；64文件完整世界备份且哈希验证：
-`runtime/test-backups/before-dynamic-terrain-20261007-200301`。
-20:21新版DLL与主Lua已安装，14个受管文件哈希一致，存档全部64文件与备份一致。
-安装收据 `logs/dynamic-area-20261007-194446/installation.json`，临时只读捕获代码已移除。
-唯一autorun仍是loader，不需要手工Reset Scripts。
+**随后导航扩展实验触发闪退，现已撤下。重启后的基础场景与 MC 接管/恢复已由用户确认正常。**
+22:21:44日志记录 AIMapEffector.hasEffectNodes 调用异常，紧接访问违规；
+尚未区分调用、注册/清理、原生更新时序问题。不要只加pcall后再次尝试。
+运行脚本已删除导航创建和 hasEffectNodes 调用，navigation_cube动作拒绝。
+导航PFB/USER已撤到隔离日志；资源生成器仅保留 navigation-offline-only 离线复现。
+不要部署导航生成物，不要启用旧native block collider全局开关或WorkRate实验。
 
-已请求用户启动游戏进场景，暂不F10。收到回复后：核实当前游戏PID/进程路径和新状态；
-启动原世界：`G:/Onimusha_MC_mod/tools/MC-launch-dev.ps1 -WorldName OnimushaMC-XYZ-v2
--LogPrefix live-dynamic-terrain-20261007 -StartHidden -QuitWithHost -SwordBlocking`。
-确认MC连接、碰撞异步job published、消费ACK/host_ready后，再让用户F10开启沿旧断联路线往返，
-继续走远一点，测试后保持开启读取日志。**当前启动问题已发出，不要重复提问。**
-不要模拟键鼠输入；实际游戏操作由用户完成。不要杀MC Java，关游戏后等待保存退出。
+游戏PID107512已退出；MC PID115140检测宿主退出后22:21:51正常保存退出。
+当前64文件世界备份且SHA256核对：`runtime/test-backups/after-native-probe-20261007-222930`。
+未手动改世界、道具或背包。世界仍为 OnimushaMC-XYZ-v2。
+MC日志 `logs/live-dynamic-terrain-20261007.stdout.log`。
+事故、源码隔离副本、dump、恢复收据均在 `logs/remaining-engine-work-20261007/`。
+两个探针控制 enabled=false，22个部署文件哈希一致。
+24个Lua回归通过；本轮DLL/JAR/主Lua/攻击脚本没有改动。
+
+新游戏PID84716已进入场景；原MC世界已由开发启动器恢复，PID85296。
+MC日志 `logs/live-native-probe-recovery-20261007.stdout.log`。
+用户确认移动、视角、背包和F10关闭恢复均正常。连接、相机、地形均ready，无渲染协议拒绝。
+用户到空地关闭接管后，physics-enemy-collision-20261007-a 已成功生成。
+用户确认普通敌人被挡住。随后 remove-physics-enemy-collision-20261007-a 已回报 removed/destroyed=true。
+控制文件已再次 disabled，当前没有测试物体、没有待回复问题。
+日志目录保存 physics-enemy-collision-a 的 ready/user-pass/user-feedback/removed 证据。
+下一步将原生碰撞创建/删除接入MC实际方块同步。导航仍隔离，不能自动加载。
+导航继续离线排查，纯显示+Colliders创建路径已通过，可作为后续MC方块同步基础。
+RENSOLIDS只有占用位，不能把半砖/楼梯/栅栏都变成满立方体；需要精确形状或明确支持范围。
+MC角色原生材质/动画和处决也仍未完成。
+
+项目唯一autorun为loader；不需手工Reset。旧进程请求`6031a4a3de464c1fa77eead8471ffb66`
+曾因退出超时；新进程启动后已处理该请求，generation2、frame32、phase=loaded。
+游戏目录中的payload为无导航版本，源码与部署指纹一致。
+老稳定提交df92eb8及动态地形候选包保留，不能用原生实验覆盖稳定发行包。
 
 ## 本轮实现与道具
 
