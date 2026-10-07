@@ -5,6 +5,77 @@
 
 ## 最新结果与下一步
 
+### 最新实测：铁块、圆石、TNT原生绘制通过；通用方块尚未实现
+
+用户确认预加载版“铁方块、圆石、TNT正常了，南瓜、梯子还是MC的效果”，并问是否逐个适配。
+已明确答复当前是16种白名单；南瓜/梯子未接原生绘制。通用方案应自动读取MC烘焙模型/贴图/状态，
+按类型+状态缓存RE资源，同外观只转换一次、放置复用，处理方向/薄片/cutout，不能不断手工加白名单。
+**这一通用方案尚未实现，也未声称完成。** 首次新模型转换延迟、非整块的所有权/碰撞均需独立处理。
+
+游戏81132与MC107592仍运行，F10接管保持开启，无待回复操作问题。
+状态 `native_sections`: synchronized，8/8实例ready，3种资源ready，无loading/error/临时预载GO残留；
+原生碰撞9/9ready（原生绘制与碰撞支持集合不同）。证据
+`logs/live-native-sections-20261008/user-three-kinds-pass.json`。
+当前是protocol14，已安装JAR E3466C4E...与Lua B832F0BF...，完整哈希见下面检查点。
+暂未实测此版F10关闭清理/冷启动16种/1280性能，不要要求再做无关攻击等旧测试。
+
+### 02:32最新：圆石用户实景通过，其他种类冷加载修正待验收
+
+编号修正后仍有Cube resource timeout；记录显示铁块MeshReady/MaterialReady=false、材质数0，
+但所属碰撞对象Update=true。用已验证单对象探针对同一圆石资源独立加载成功，
+保存证据 `logs/live-native-sections-20261008/prebuilt-cobble-standalone-ready.json`，随后撤掉探针。
+按验证过的DrawSelf初始化顺序再次试验后，用户确认“圆石方块能正常接鬼武者光照，但其他没有”。
+当时圆石资源已经驻留，其他冷资源仍超时；不能把这一轮称为全部通过。
+
+新增**每种类一个隐藏预加载对象**，沿用成功单对象路径等待Mesh/MaterialReady，再把共用holder交给
+现有碰撞对象。最多每帧新建2个预加载器、总种类16；资源就绪后立即销毁预加载GO并等延迟销毁。
+这不是逐方块建第二套GO，也不实时转换文件。某个种类预加载失败不再撤掉其他已就绪种类。
+回归覆盖冷种类超时隔离/隐藏对象回收/共享holder/1280实例/重载，已通过。
+
+当前Lua `B832F0BFFEA6B6E6EC9D3610EF57ADD5DC8156F749F65B2747F632E29CD0C7D3`；
+备份 `runtime/test-backups/native-instance-preload-20261008-023148`。
+loader generation6 / id `22d683df4a6048f084fb84ec88bccd84` loaded。
+游戏81132、MC107592持续运行，F10因重载关闭，探针control enabled=false。
+最新已请用户“按F10开启，观察已有铁块等方块是否开始接原生光照，保持开启”；等待答复。
+回复后立即检查 native_sections.resources_ready/resources_loading/resource_errors、ready/count/desired
+及prefab_blocks。仍未确认16种/冷启动/拆除/F10清理和性能，勿宣称全部完成。
+
+### 02:13追加：实景发现Lua资源编号格式问题，已热修，等待开启接管读取
+
+用户第一轮反馈“贴图对，但遮挡不正确且完全没有原生光照”。实际status明确显示
+`Missing cube kind 2.0`，不是本方案光照通过；Lua收到DLL的浮点编号2.0，用tostring查找JSON键"2"失败。
+现在先用math.tointeger验证/规范化资源编号，沿用原碰撞坐标和生命周期；回归已加入浮点/整数混合编号。
+只更新 `onimusha_native_instances.lua`，安装哈希
+`3C85ED589E5CE007C87372592E80F4AB53930A11D06B050A9751992614782D55`，77项部署核对通过。
+备份 `runtime/test-backups/before-cube-integer-fix-20261008-0210`。
+自动重载generation3，id `1fc5dc0604f240c386aeca12144d11c1`，phase=loaded。
+游戏81132和MC107592均保持运行。最新问用户：按F10开启并保持，先不用放方块；
+收到回复立即读native_sections/prefab_blocks，确认原生模型ready>0且error为空再进行目视验收。
+
+### 02:06当前状态：MC已连接，预制资源识别修正，等待少量方块实景结果
+
+用户已启动鬼武者，PID81132自01:53持续运行。MC首次PID88040正常连接，但发现默认Fabric
+把每个模块列成独立资源包，旧的vanilla/fabric名称白名单导致 `prebuilt cube resources=false`。
+已改成检查实际minecraft命名空间的方块贴图、模型、blockstates、atlas资源来源；Fabric仅列出
+资源包但没有覆盖这些资产时不阻止原生绘制，实际自定义资产仍保留MC绘制。
+新增4项回归，Java共67项通过，JAR重新编译安装。
+
+通过本项目JDK Attach维护工具 `onimusha/tools/java/MinecraftSaveAndQuit.java` 在MC渲染线程调用
+正常 `Minecraft.stop()`；日志确认保存玩家/世界/区块并退出。没有结束鬼武者，没有强杀Java。
+重启前65个存档文件逐项哈希备份，路径
+`runtime/test-backups/before-pack-source-fix-20261008-0204`，未编辑存档/背包。
+新JAR SHA256 `E3466C4EA12B78ED54486AB8147C8CE05BEFD57142560EE79B572A44626DB571`；DLL/Lua/77项游戏部署不变。
+
+当前MC PID107592，世界 `OnimushaMC-XYZ-v2`，日志前缀 `live-native-instances-packfix-20261008`。
+日志确认四类资产来源均vanilla，`Onimusha prebuilt cube resources: true`。
+protocol14、connected/camera_ready/collision_ready/host_ready均true，render_invalid/rejected均0，error为空。
+F10关闭，所以native.ready/renderer_ready=false、native_sections.phase=disabled是预期状态。
+已向用户询问：开启F10，少量连续放置石头/铁块，观察纹理、场景光照、遮挡、延迟/闪烁，
+随后保持开启供读取。**等待这一轮结果；不要重复启动MC或要求Reset Scripts。**
+证据 `logs/live-native-sections-20261008/connected-packfix-status.json`。
+
+以下01:43为部署历史，里面“当前未运行/等待重启”已经被本节取代。
+
 ### 01:43当前安装：预制方块实例原生绘制，protocol14，等待重启验收
 
 用户要求接管时实际放置方块受鬼武者光照/遮挡，并指出合并模型转换0.45秒的交互延迟。

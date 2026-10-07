@@ -141,8 +141,19 @@ public final class WorldExporter {
 		CUBE_FACES.clear();
 		// Prebuilt resources use this installation's vanilla textures. Custom user packs
 		// must keep their own exported geometry/atlas instead of silently losing their skin.
-		nativeVanillaCubes = minecraft.getResourcePackRepository().getSelectedIds().stream()
-			.allMatch(id -> id.equals("vanilla") || id.equals("fabric"));
+		// Fabric 26.3 exposes a pack per module, even without any vanilla block overrides.
+		// Inspect effective asset sources instead; stacks include texture metadata and
+		// additive atlas definitions, so a user override still keeps the MC rendering.
+		var blockSources = new java.util.HashMap<String, java.util.Collection<String>>();
+		for (String root : dev.skycraft.link.VanillaBlockResources.ROOTS) {
+			var sources = minecraft.getResourceManager().listResourceStacks(root,
+				id -> id.getNamespace().equals("minecraft")).values().stream()
+				.flatMap(java.util.Collection::stream).map(r -> r.sourcePackId()).toList();
+			blockSources.put(root, sources);
+		}
+		nativeVanillaCubes = dev.skycraft.link.VanillaBlockResources.compatible(blockSources);
+		SkyCraft.LOG.info("Onimusha block asset sources: {}", blockSources.entrySet().stream()
+			.collect(java.util.stream.Collectors.toMap(e -> e.getKey(), e -> e.getValue().stream().distinct().toList())));
 		SkyCraft.LOG.info("Onimusha prebuilt cube resources: {} (selected packs {})", nativeVanillaCubes, minecraft.getResourcePackRepository().getSelectedIds());
 		boolean ao = minecraft.options.ambientOcclusion().get();
 		blockRenderer = new ModelBlockRenderer(ao, true, minecraft.getBlockColors());
