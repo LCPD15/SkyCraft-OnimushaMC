@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$ProjectRoot = 'G:\Onimusha_MC_mod',
     [string]$GameRoot = 'F:\SteamLibrary\steamapps\common\OnimushaWotS',
@@ -23,7 +23,11 @@ if ($ProbeOnly) {
     $taskEntries += @{Source=(Join-Path $taskRepo 'onimusha\adapter\onimusha_mc_probe.lua'); Relative='reframework\autorun\onimusha_mc_probe.lua'}
 } else {
     $taskEntries += @{Source=(Join-Path $ProjectRoot 'build\native\Release\OnimushaMC.dll'); Relative='reframework\plugins\OnimushaMC.dll'}
-    $taskEntries += @{Source=(Join-Path $taskRepo 'onimusha\adapter\onimusha_mc.lua'); Relative='reframework\autorun\onimusha_mc.lua'}
+    $taskEntries += @{Source=(Join-Path $taskRepo 'onimusha\adapter\onimusha_loader.lua'); Relative='reframework\autorun\onimusha_loader.lua'}
+    foreach ($taskPayload in @('onimusha_mc.lua','onimusha_enemy_hit.lua','onimusha_guard_probe.lua','onimusha_combat_inventory.lua')) {
+        $taskEntries += @{Source=(Join-Path $taskRepo ('onimusha\adapter\'+$taskPayload)); Relative=('reframework\data\onimusha_mc\scripts\'+$taskPayload)}
+    }
+    $taskEntries += @{Source=(Join-Path $taskRepo 'onimusha\config\onimusha_enemy_hit_control.json'); Relative='reframework\data\onimusha_enemy_hit_control.json'}
     if ($IncludeExperimentalColliderAsset) {
         $taskEntries += @{Source=(Join-Path $taskRepo 'onimusha\assets\natives\stm\mod\onimusha_mc\unit_box.rcol.37'); Relative='natives\stm\mod\onimusha_mc\unit_box.rcol.37'}
     }
@@ -57,6 +61,25 @@ if (Test-Path -LiteralPath $taskManifestPath) {
     $taskPrior = Get-Content -LiteralPath $taskManifestPath -Raw | ConvertFrom-Json
     if ($taskPrior.GameRoot -ne $GameRoot) { throw 'The deployment manifest belongs to a different game folder.' }
     $taskManifest.Entries = @($taskPrior.Entries)
+}
+if (-not $ProbeOnly) {
+    # A legacy autorun and a loader payload must never register the same hooks.
+    # Migrate only files recorded in this project's manifest, keeping a backup.
+    foreach ($taskLegacy in @('onimusha_mc.lua','onimusha_enemy_hit.lua','onimusha_guard_probe.lua','onimusha_combat_inventory.lua')) {
+        $taskRelative='reframework\autorun\'+$taskLegacy
+        $taskLegacyPath=[IO.Path]::GetFullPath((Join-Path $GameRoot $taskRelative))
+        if (-not (Test-Path -LiteralPath $taskLegacyPath)) {continue}
+        $taskRecord=$taskManifest.Entries|Where-Object Relative -eq $taskRelative|Select-Object -First 1
+        if (-not $taskRecord -or (Get-FileHash -LiteralPath $taskLegacyPath).Hash -ne $taskRecord.InstalledSHA256) {
+            throw "Unrecognized/modified legacy autorun; retained: $taskLegacyPath"
+        }
+        $taskBackup=[IO.Path]::GetFullPath((Join-Path $ProjectRoot ('runtime\deployment-backup\loader-migration-'+[Guid]::NewGuid().ToString()+'\'+$taskLegacy)))
+        if (-not $taskLegacyPath.StartsWith($GameRoot+'\') -or -not $taskBackup.StartsWith($ProjectRoot+'\')) {throw 'Migration path outside project/game'}
+        New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($taskBackup)) -Force|Out-Null
+        Move-Item -LiteralPath $taskLegacyPath -Destination $taskBackup
+        $taskManifest.Entries=@($taskManifest.Entries|Where-Object Relative -ne $taskRelative)
+        $taskManifest|ConvertTo-Json -Depth 8|Set-Content -LiteralPath $taskManifestPath -Encoding UTF8
+    }
 }
 foreach ($taskEntry in $taskEntries) {
     $taskTarget = Join-Path $GameRoot $taskEntry.Relative

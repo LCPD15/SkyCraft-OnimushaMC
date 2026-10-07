@@ -219,10 +219,19 @@ return function()
  deliver({{type=1,form_id=9,a=7}})
  assert(state.actors.enemy.health.setters==0)
  _G.onimusha_enemy_hit=nil
+ cfg.require_native_enemy_damage=true
+ local before=enemy.current;local setters=enemy.setters
+ deliver({{type=1,form_id=9,a=7}})
+ assert(enemy.current==before and enemy.setters==setters and latest('events').reason=='native_enemy_damage_not_ready')
+ _G.onimusha_enemy_hit={queue=function() return false end}
+ deliver({{type=1,form_id=9,a=7}})
+ assert(enemy.current==before and enemy.setters==setters and latest('events').reason=='native_enemy_damage_not_ready')
+ cfg.require_native_enemy_damage=false;_G.onimusha_enemy_hit=nil
+ passed('missing/off native module cannot silently fall back to direct HP in production mode')
  passed('optional native queue owns both success and ambiguous failure without direct HP fallback')
  return cases
 end
 ''')
 count=run()
-assert count==14
+assert count==15
 print(f"COMBAT_TELEMETRY_REGRESSION_OK {count} actual-production cases; LUA54_COMPLETE_SYNTAX_OK")

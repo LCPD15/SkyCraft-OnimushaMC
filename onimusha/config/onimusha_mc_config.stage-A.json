@@ -20,5 +20,6 @@
   "enable_terrain_queries": false,
   "runtime_stage": "A",
   "config_reload_frames": 120,
-  "enable_native_block_colliders": false
+  "enable_native_block_colliders": false,
+  "require_native_enemy_damage": true
 }

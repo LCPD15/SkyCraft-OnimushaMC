@@ -19,10 +19,10 @@ local factory,engine
 function setup()
  engine={queues=0,duplicates=0,hp=2000,origin={},fail=false}
  factory=function()
-  local attack,fixed=100,0
+  local attack,fixed=100,0;local asset=engine.asset
   return obj('app.cAttackRuntimeParamPlayer',{
    ['duplicate()']=function() engine.duplicates=engine.duplicates+1;return factory() end,
-   get_OriginData=function() return engine.asset end,
+   get_OriginData=function() return asset end,
    get_Attack=function() return attack end,get_FixedAttack=function() return fixed end,
    get_RikidoAttack=function() return 150 end,get_BreakAttack=function() return 75 end,
    set_Attack=function(n) attack=n end,set_FixedAttack=function(n) fixed=n end,
@@ -78,8 +78,9 @@ function setup()
 end
 function engine_state() return engine end
 ''')
-module = lua.execute(source.split('_G.onimusha_enemy_hit={queue=queue}', 1)[0] + '''
-return {queue=queue,capture=capture,state=function() return s end,resolve=resolve_player,initialize=initialize}
+module = lua.execute(source.split('_G.onimusha_enemy_hit={', 1)[0] + '''
+return {queue=queue,capture=capture,state=function() return s end,resolve=resolve_player,initialize=initialize,
+ resolve_profiles=resolve_profiles,create_runtime=create_runtime}
 ''')
 lua.globals().module = module
 lua.execute(r'''
@@ -101,6 +102,26 @@ assert(e.queued_runtime:call('get_FixedAttack')==700)
 passed('enqueue once without manual HP mutation or modifying original attack asset')
 assert(module.queue(t,b,700,{})==true and e.queues==1)
 passed('single-hit trial budget prevents repeated native requests')
+
+e,s,b,t=prepare();e.distance=12
+t.bounds_native={min={x=8,y=2,z=-2},max={x=16,y=6,z=2},source='active_damage_colliders'}
+tr={};assert(module.queue(t,b,700,tr) and tr.outcome=='queued_native' and e.queues==1)
+assert(tr.native_hit_position.y==4.4 and tr.native_bounds_source=='active_damage_colliders')
+passed('large/floating target range and effect point use damage bounds rather than root position')
+e,s,b,t=prepare();t.bounds_native={min={x=1,y=0,z=0},max={x=0,y=1,z=1}}
+tr={};assert(module.queue(t,b,700,tr) and tr.outcome=='rejected' and e.queues==0)
+passed('malformed damage bounds rejected before any native enqueue')
+
+e,s,b,t=prepare();e.distance=30;tr={flags=2}
+assert(module.queue(t,b,700,tr) and tr.outcome=='queued_native' and e.queues==1 and tr.native_range==128)
+passed('projectile impact outside melee reach reaches native damage with the same shared profiles')
+e,s,b,t=prepare();e.distance=129;tr={flags=2}
+assert(module.queue(t,b,700,tr) and tr.reason=='native_hit_out_of_range' and e.queues==0 and #s.errors==0)
+e,s,b,t=prepare();e.distance=30;tr={flags=0}
+assert(module.queue(t,b,700,tr) and tr.reason=='native_hit_out_of_range' and e.queues==0 and #s.errors==0)
+passed('ordinary out-of-range requests rejected without marking the native module unhealthy')
+
+
 
 e,s,b,t=prepare();s.mode='off';assert(module.queue(t,b,700,{})==false and e.queues==0)
 passed('off mode leaves existing adapter route available')
@@ -144,6 +165,36 @@ for i=1,32 do
 end
 assert(chosen[1] and chosen[2] and e.queues==32)
 passed('two generic profiles selected at random, duplicate natural hit not captured twice')
+
+-- No retained runtime survives reset. The actual production resolver must get
+-- both assets through a fresh owner graph using stable IDs on every request.
+e,s,b,t=prepare();s.mode='enabled';s.templates={};s.selected={};s.trial_remaining=0
+local assets={}
+for i,want in ipairs({{1,100,150,75,0},{41,300,450,300,81922}}) do
+ local old=e.asset
+ local a=obj('app.cAttackParamDataPlayer',{}, {_Attack=want[2],_RikidoAttack=want[3],_ArmorAttack=want[4],
+  _PlayerFlagBit=want[5],['<PercentageDamageType>k__BackingField']=0})
+ a.call=function(_,n) assert(n=='createRuntimeParam()');e.asset=a;local copy=e.runtime:call('duplicate()');e.asset=old;return copy end
+ assets[i]=obj('item',{}, {_ID=want[1],_AttackParam=a})
+end
+local items={get_elements=function() return assets end}
+local support=obj('support',{}, {_AttackParamData=obj('asset',{}, {_AttackParamListItems=items})})
+local weaponitem=obj('weaponitem',{}, {WeaponGimmick=obj('app.Gm800_000',{}, {}),['<WeaponGimmickGameObj>k__BackingField']=e.weapon})
+local weapons=obj('weapons',{}, {_WeaponDataList=obj('list',{}, {_size=1,_items={get_element=function(_,i) assert(i==0);return weaponitem end}})})
+local original=e.pe.call
+e.pe.call=function(self,n,...) if n=='get_AttackParamSupporter' then return support elseif n=='get_Weapon' then return weapons end
+ return original(self,n,...)
+end
+local profiles={}
+for i=1,12 do tr={};assert(module.queue(t,b,700,tr) and tr.outcome=='queued_native');profiles[tr.native_profile_id]=true end
+assert(e.queues==12 and profiles[1] and profiles[41] and #s.templates==0)
+passed('empty post-reset template list resolves both owned asset IDs and allows repeated generic native hits')
+local a=assets[1]:get_field('_AttackParam');local read=a.get_field
+a.get_field=function(self,n) if n=='_Attack' then return 999 end;return read(self,n) end
+tr={};assert(module.queue(t,b,700,tr) and tr.outcome=='rejected' and e.queues==12 and e.hp==2000)
+assert(s.mode=='enabled')
+a.get_field=read;tr={};assert(module.queue(t,b,700,tr) and tr.outcome=='queued_native' and e.queues==13)
+passed('changed fingerprint rejects without HP fallback; valid asset recovery does not need an enemy-specific rule')
 
 e,s,b,t=prepare()
 local count=0

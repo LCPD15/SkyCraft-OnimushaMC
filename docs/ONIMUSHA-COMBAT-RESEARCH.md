@@ -2,6 +2,10 @@
 
 2026-10-07。仅适用于本地 OnimushaWotS 01.000.001 / TDB82，不能直接套到其他RE游戏。
 
+**当前结果：** 原生受击已由用户实测确认。普通／强化小怪首次 8 次命中、通用活动受击范围更新后悬浮及其他两类敌人 14 次命中，均有真实 execFirst/ThirdDamage、applyHitEffect、applyHitSound 记录，无额外 HP 写入。当前使用两个玩家拥有的稳定资产 ID 1/41，每次独立 createRuntimeParam，不再依赖重载即失效的人工捕获模板。旧 10 米限制拦截了三次远程命中，已按通用 projectile/fire 标志修正；远程实景测试待回复。最新停点见 [ONIMUSHA-RESUME.md](ONIMUSHA-RESUME.md)。
+
+以下为按时间保留的调查历史；其中“尚未调用／待采样”描述当时状态，不是当前验收结论。
+
 用户已重新确认MC剑击会扣敌人HP；未显示血条导致过一次误判。当前EV1通过目标ID获取HealthManager，执行setHealth/checkHealthZero，没有走原生受击、特效、声音或破甲流程。不能再用“没有扣血”作为修复前提，也不能将手动减血描述成完整原生战斗。
 
 以下来自本地`onimusha_mc_probe_types.json`和snapshot的`discovered_types`，只是接口存在的证据，不代表已确认执行顺序或安全调用方式：
@@ -59,3 +63,15 @@ onimusha_enemy_hit.lua是显式控制文件arm的单击试验：随机选两模�
 模板目前仅本次Lua会话有效；正式版仍需持久资产来源及场景重建。未做原生物理、图形资源或动画强制切换。
 
 MOD制作：LCPD15/LCPD拉灯
+
+## 稳定资产、通用范围与原生反馈实景
+
+Reset 清空临时模板后，旧 trial 控制引用 [1,2] 导致 Invalid selected template，随后 legacy HP fallback 造成无原生反馈。failure 快照实际有 14 次直接 HP 写入，不能归因于单击预算。修复启用稳定资产解析与 require_native_enemy_damage；原生路由失效时明确拒绝，绝不改用手动扣血伪装成功。
+
+资产通过当前玩家 AttackParamSupporter → AttackParamData → AttackParamListItems 的 ID 查找，校验 ID1 的 100/150/75/0 与 ID41 的 300/450/300/81922 指纹。玩家基础剑对象经 WeaponDataList 的 Gm800_000 所有权链取得；不是从历史地址恢复对象。每击从资产创建新 runtime，Attack0 / FixedAttack=MC结果×100，所有敌人调用一次实体的长 stockDirectDamage，BODY 部位、可空附加参数；原生防御／格挡决定结算。
+
+实景首次 8 次请求、四个观察点各匹配 8 次，Em101_00/50 均成功；Em101_50 的六次普通 700 伤害从3900逐步到0。全局两种 profile 均被选中。随后通用范围版共17个事件：14个成功、3个远程超距拒绝；成功目标Em102_00、Em107_00、Em105_00，四观察点各14次。用户确认此前打不到的敌人也能扣血和反馈。snapshot evidence: logs/native-enemy-user-failure-20261007/native-feedback-confirmed-*、bounds-user-confirmed-*。
+
+近处代理读取 TYPE_DAMAGE 组的当前活动 RequestSet 与启用 collidable 世界 AABB；排除攻击体积、停用部位、离角色过远的未初始化本地包围盒。MC 代理仍是一只聚合包围盒，范围采样32格，远处回退移动胶囊；不是精确逐部位射线，也尚未映射原生装甲弱点。效果点采用受击盒位置，避免把飞行敌人根节点当脚底。每次仍确认真实实体、HealthManager、模块派生关系、有效性和生命值。
+
+注意120帧后的 settled_sample 可能包含中间后续命中的累计扣血，不能当作每击伤害；用即时 native_pre/post 与下一次 before 判断。致死奖励／完整Boss阶段／冷启动／切场景仍需覆盖。远程范围补丁部署后 pending 实景，不与已通过的近战验收混写。

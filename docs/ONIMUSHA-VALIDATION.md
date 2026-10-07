@@ -2,9 +2,9 @@
 
 当前处于开发和场景接入阶段。更新时间：2026-10-07。本记录只覆盖 OnimushaWotS 的本地版本，不覆盖其他 RE 游戏。
 
-最新验收：BC6A转向时任务图标和敌人血条正常跟随，F10恢复通过。Lua466822/JAR22004的MC格挡音效、未格挡正常扣血已由用户确认；原生受伤/MC恢复道具双向HP同步正常。7MC→700原生HP已实测，倍率100生效，完整平衡未验收。敌人原生反馈正在进行双模板单击试验，尚未通过。MC方块站立不代表原生NPC碰撞；真正RE深度和光照未接入。
+最新验收：BC6A转向时任务图标和敌人血条正常跟随，F10恢复通过。Lua466822/JAR22004的MC格挡音效、未格挡正常扣血已由用户确认；原生受伤/MC恢复道具双向HP同步正常。7MC→700原生HP已实测，倍率100生效，完整平衡未验收。敌人原生反馈已通过：稳定资产双 profile 首轮8次，活动受击范围版14次，用户确认此前打不到的敌人也能扣血和反馈；远程距离补丁待实景。MC方块站立不代表原生NPC碰撞；真正RE深度和光照未接入。
 
-Latest acceptance: turning world-space UI and release passed. Lua466822/JAR22004 passed real blocking sound and ordinary HP loss; healing synchronizes both games. The scale100 HP path is verified, while native enemy hit feedback remains an unverified two-profile experiment. Native NPC block collision and true RE depth/lighting remain unfinished.
+Latest acceptance: turning world-space UI and release passed. Lua466822/JAR22004 passed real blocking sound and ordinary HP loss; healing synchronizes both games. The scale100 HP path is verified, while native enemy feedback passed 8 shared-profile hits and 14 hits with active damage bounds; the projectile range correction awaits live verification. Native NPC block collision and true RE depth/lighting remain unfinished.
 
 2026-10-06 场景加载期间出现一次游戏本体空指针崩溃。当时 MC 未连接、接管未开启、GPU 绘制未初始化；同时启用了新增原生碰撞对象测试，具体根因尚未确认。停用 DLL 和这些测试，仅保留严格只读 Lua 后，用户确认可以正常进入场景。当前默认配置为只读阶段 A，新增原生 Collider/RCOL 创建及零伤害钩子测试均关闭。
 
@@ -95,7 +95,7 @@ After reset, the user passed continuous movement, turning, jumping and traversal
 | 原地形碰撞 | 当前场景墙体和台阶实测通过；切场景待验证 / Walls and steps passed in tested scene | 地板、台阶、墙体、场景切换正确且不掉穿 |
 | MC 方块建造和拆除 | 放置、站上方块、拆除后走过原位置实测通过 / Placement, player collision and removal passed | 原地形不可拆除；NPC实体方块碰撞另列实验项 |
 | 鬼武者实体方块碰撞 | 未实现有效原生碰撞，用户确认无法阻挡敌人；实验创建仍停用 / Native NPC collision failed; experimental creation disabled | 原游戏实体受方块阻挡，拆除和切场景不残留碰撞；不得自动启用未验证创建路径 |
-| MC 战斗 | 用户重新确认剑击扣血；原生受击反馈缺失 / Sword damage confirmed; native reactions missing | 伤害已确认；死亡、受击、硬直和破甲仍须接入/验收；代理日志不能替代原生证据 |
+| MC 战斗 | 稳定双 profile 原生反馈及通用受击范围实测通过 / Shared native profiles and active hurt bounds passed | 8+14次原生队列、特效／声音观察点匹配且用户确认；全Boss阶段、致死奖励、破甲和远程距离补丁仍待覆盖 |
 | 原生世界空间UI | BC6A原生lateUpdate结束同步后，用户确认转向时任务图标和血条正常跟随，关闭接管恢复 / Turning and release passed | 证据logs/live-camera-bc6a-20261007；更多场景仍需验收 |
 | MC格挡与受击 | Lua466822/JAR22004，用户确认格挡音效及正常扣血 / Block sound and HP loss passed | 红闪、击退、火花、背后攻击和特殊弹反未逐项验收 |
 | 金苹果 | 新增4×64普通金苹果用户已确认 / Four stacks verified | 写入前独占锁定和完整世界备份，禁止重复添加 |
@@ -105,3 +105,6 @@ After reset, the user passed continuous movement, turning, jumping and traversal
 | 过场和原游戏交互 | 待验证 / Pending | 原游戏交互保留；过场不抢相机或残留输入 |
 
 实际测试日志保存在任务目录的 logs/ 和游戏 reframework/data/；日志不含登录凭据。发布前更新此记录并附可复现的测试环境。
+
+
+2026-10-07 通用受击修复：两套资产从当前玩家解析，无需每种敌人或重载后人工采样。用户两次确认原生受击效果及各类敌人正常扣血；实际 hooks 每击匹配，未叠加 direct HP。20个Lua回归脚本全部通过；后续远程距离分支专项16组通过。近处活动受击AABB及飞行敌人效果位置已实景执行，仍是聚合代理，不能标为精确部位攻击。自动重载首装后连续5次成功到generation6，无DLL/JAR更新。远程 HIT_PROJECTILE 旧10米限制修正已安装，验收结果另补，不提前判为通过。

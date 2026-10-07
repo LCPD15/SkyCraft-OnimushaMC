@@ -1,5 +1,5 @@
--- OnimushaWotS 01.000.001 / TDB82: bounded generic native-hit trial.
--- One ordinary player-hit template for every enemy; no enemy/animation tables.
+-- OnimushaWotS 01.000.001 / TDB82: generic native enemy damage.
+-- Two player attack assets shared by EVERY enemy, independent of enemy name.
 -- The native entity enqueues exactly once. Never add a second HP write afterward.
 -- MOD制作：LCPD15/LCPD拉灯
 local CONTROL='onimusha_enemy_hit_control.json'
@@ -12,6 +12,12 @@ local DIRECT='stockDirectDamage(via.GameObject, via.GameObject, app.cAttackRunti
     NULLDIR..', '..NULLVEC..', '..NULLVEC..', '..NULLVEC..', '..NULLVEC..', app.CharacterDef.PARTS_INDEX, via.GameObject)'
 local s={frame=0,mode='off',events={},errors={},metadata={},pending={},hooks={},trial_remaining=0,
     templates={},capture_info={},captured_ids={},selected={}}
+-- Matched to the user's natural-hit captures through the current player's
+-- owned asset list (IDs 1 and 41). These are asset IDs, never memory addresses.
+local PROFILES={
+    {id=1,attack=100,rikido=150,armor=75,flags=0},
+    {id=41,attack=300,rikido=450,armor=300,flags=81922},
+}
 local function typ(o) return o and o:get_type_definition():get_full_name() end
 local function addr(o) return o and o:get_address() end
 local function same(a,b) return a~=nil and b~=nil and addr(a)==addr(b) end
@@ -28,7 +34,8 @@ end
 local function failure(where,e)
     s.errors[#s.errors+1]={frame=s.frame,where=where,error=tostring(e):sub(1,700)}
     if #s.errors>16 then table.remove(s.errors,1) end
-    s.mode='off';s.trial_remaining=0
+    s.ready=false;s.trial_remaining=0
+    if s.mode~='enabled' then s.mode='held' end
 end
 local function scene()
     return sdk.call_native_func(sdk.get_native_singleton('via.SceneManager'),
@@ -55,9 +62,53 @@ local function clone(runtime)
     assert(same(get(copy,'get_OriginData'),get(runtime,'get_OriginData')),'Duplicate lost origin asset')
     return copy
 end
+local function resolve_profiles(p)
+    local supporter=get(p.entity,'get_AttackParamSupporter')
+    local asset=assert(supporter:get_field('_AttackParamData'),'Player attack asset unavailable')
+    local items=assert(asset:get_field('_AttackParamListItems')):get_elements()
+    assert(#items<=2048,'Unexpected attack asset size')
+    local found={}
+    for _,item in ipairs(items) do
+        local id=item:get_field('_ID')
+        for i,want in ipairs(PROFILES) do
+            if id==want.id then
+                assert(not found[i],'Duplicate player attack asset ID')
+                local data=exact(item:get_field('_AttackParam'),'app.cAttackParamDataPlayer')
+                assert(data:get_field('_Attack')==want.attack and data:get_field('_RikidoAttack')==want.rikido
+                    and data:get_field('_ArmorAttack')==want.armor and data:get_field('_PlayerFlagBit')==want.flags
+                    and data:get_field('<PercentageDamageType>k__BackingField')==0,
+                    'Player attack asset fingerprint changed; game adapter update required')
+                found[i]={asset=data,id=id}
+            end
+        end
+    end
+    assert(found[1] and found[2],'The two shared player attack assets are not loaded')
+    local weapons=get(p.entity,'get_Weapon'):get_field('_WeaponDataList')
+    local count=weapons:get_field('_size');assert(count>=0 and count<=64,'Unexpected weapon list size')
+    local list=weapons:get_field('_items');local weapon
+    for i=0,count-1 do
+        local item=list:get_element(i)
+        -- The captured attack object is the player's base sword, shared by both
+        -- profiles. Resolve it through its live owner, never a retained pointer.
+        if item and typ(item:get_field('WeaponGimmick'))=='app.Gm800_000' then
+            local go=item:get_field('<WeaponGimmickGameObj>k__BackingField')
+            if go and get(go,'get_Valid')==true then weapon=go;break end
+        end
+    end
+    assert(weapon,'Player base sword object unavailable')
+    s.profile_info={{id=PROFILES[1].id},{id=PROFILES[2].id}};s.ready=true
+    return found,weapon
+end
+local function create_runtime(asset)
+    local runtime=exact(get(asset,'createRuntimeParam()'),RUNTIME)
+    runtime:add_ref()
+    assert(same(get(runtime,'get_OriginData'),asset),'Runtime factory lost attack origin')
+    return runtime
+end
 local function decode(args)
     if sdk.is_managed_object(args[2])~=true or sdk.is_managed_object(args[3])~=true then return end
-    local damage=exact(sdk.to_managed_object(args[2]),'app.cEnemyApplyDamage')
+    local damage=sdk.to_managed_object(args[2])
+    assert(damage and damage:get_type_definition():is_a('app.cEnemyApplyDamage'),'Not an enemy damage module')
     if get(damage,'get_Valid')~=true or get(damage,'get_IsDestroy')~=false then return end
     local owner=get(damage,'get_OwnerCharacter')
     assert(owner and owner:get_type_definition():is_a('app.EnemyCharacter'),'Not an enemy owner')
@@ -125,7 +176,7 @@ local function hook(spec)
             -- A base effect callback also serves the player: check its actual
             -- damage-module type before decode, without treating it as an error.
             if sdk.is_managed_object(args[2])~=true then return end
-            if typ(sdk.to_managed_object(args[2]))~='app.cEnemyApplyDamage' then return end
+            if not sdk.to_managed_object(args[2]):get_type_definition():is_a('app.cEnemyApplyDamage') then return end
             local d=decode(args);if not d then return end
             if spec.name=='execFirstDamage' then capture(d) end
             if s.mode=='capture' then
@@ -184,45 +235,87 @@ local function nullable(name)
     return v
 end
 local function queue(entry,bridge_state,damage,trace)
-    -- Off/preparing retains the previously tested direct-HP route. An explicitly
-    -- armed native trial consumes a hit even on rejection; never retry or fall
-    -- back after enqueue could have run.
-    if s.mode~='trial' then return false end
+    -- Production requires this route; an unavailable/off module reports not ready.
+    -- The legacy single-hit trial remains diagnostic only. Never retry or add
+    -- a direct-health write after enqueue could have run.
+    if s.mode~='trial' and s.mode~='enabled' and s.mode~='held' then return false end
     trace.native_route=true
-    if s.trial_remaining<=0 then trace.outcome='rejected';trace.reason='native_trial_budget_exhausted';return true end
-    s.trial_remaining=s.trial_remaining-1
+    if s.mode=='held' then trace.outcome='rejected';trace.reason='native_profiles_unavailable';return true end
+    if s.mode=='trial' then
+        if s.trial_remaining<=0 then trace.outcome='rejected';trace.reason='native_trial_budget_exhausted';return true end
+        s.trial_remaining=s.trial_remaining-1
+    end
     local attempted=false
     local ok,e=pcall(function()
-        assert(s.initialized and #s.selected>0,'No prepared generic hit templates')
-        local template_index=s.selected[math.random(#s.selected)]
-        local template=assert(s.templates[template_index],'Selected hit template missing')
-        trace.native_template=template_index
+        assert(s.initialized,'Native damage module not initialized')
         assert(bridge_state.active and finite(damage) and damage>0 and damage<=100000,'Invalid native hit request')
-        local p=resolve_player();assert(template.owner_identity==p.identity,'Template owner/scene changed')
+        local p=resolve_player()
         assert(same(p.player,bridge_state.player) and same(p.go,bridge_state.player_go),'Bridge player mismatch')
-        assert(get(template.weapon,'get_Valid')==true,'Template weapon unloaded')
+        local template_index,weapon,runtime
+        if s.mode=='enabled' then
+            local profiles;profiles,weapon=resolve_profiles(p)
+            template_index=math.random(#profiles)
+            runtime=create_runtime(profiles[template_index].asset)
+            trace.native_profile_id=profiles[template_index].id
+        else
+            assert(#s.selected>0,'No prepared generic hit templates')
+            template_index=s.selected[math.random(#s.selected)]
+            local template=assert(s.templates[template_index],'Selected hit template missing')
+            assert(template.owner_identity==p.identity,'Template owner/scene changed')
+            weapon=template.weapon;runtime=clone(template.runtime)
+        end
+        trace.native_template=template_index
+        assert(get(weapon,'get_Valid')==true,'Template weapon unloaded')
         local go=get(entry.obj,'get_GameObject');assert(get(go,'get_Valid')==true,'Target unloaded')
         local entity=get(get(entry.obj,'get_CharacterEntityHolder'),'get_Entity')
         assert(same(get(entity,'get_OwnerCharacter'),entry.obj),'Target entity changed')
         local target_health=get(get(get(entry.obj,'get_Context'),'get_Chara'),'get_HealthManager')
         assert(same(target_health,entry.health) and get(target_health,'get_Health')>0,'Target health changed/dead')
-        local module=exact(entity:get_field('_DamageInterface'),'app.cEnemyApplyDamage')
+        local module=assert(entity:get_field('_DamageInterface'))
+        assert(module:get_type_definition():is_a('app.cEnemyApplyDamage'),'Not an enemy damage module')
         assert(get(module,'get_Valid')==true and get(module,'get_IsDestroy')==false,'Target damage module invalid')
-        local runtime=clone(template.runtime)
         get(runtime,'set_Attack',0.0);get(runtime,'set_FixedAttack',damage)
-        -- Keep the one captured ordinary-hit reaction profile. Native defenses,
+        -- Keep the randomly selected shared reaction profile. Native defenses,
         -- guard and armor decide the response; no forced animation/effect IDs.
         local pos=get(go,'get_Transform'):get_position()
         local origin=get(p.go,'get_Transform'):get_position()
         assert(finite(pos.x) and finite(pos.y) and finite(pos.z),'Invalid target position')
-        assert((pos.x-origin.x)^2+(pos.y-origin.y)^2+(pos.z-origin.z)^2<=100,'Target outside trial range')
         local height=math.max(0.5,math.min(4,entry.height or 1.8))
         local hitpos=Vector3f.new(pos.x,pos.y+height*0.6,pos.z)
+        local distance_sq=(pos.x-origin.x)^2+(pos.y-origin.y)^2+(pos.z-origin.z)^2
+        local bounds=entry.bounds_native
+        if bounds then
+            distance_sq=0
+            for _,axis in ipairs({'x','y','z'}) do
+                local lo,hi=bounds.min[axis],bounds.max[axis]
+                assert(finite(lo) and finite(hi) and hi>=lo and hi-lo<=64
+                    and math.abs((lo+hi)*0.5-pos[axis])<=32,'Invalid target damage bounds')
+                local closest=math.max(lo,math.min(hi,origin[axis]))
+                distance_sq=distance_sq+(closest-origin[axis])^2
+            end
+            -- Actor roots are not necessarily at the feet (e.g. flying enemies).
+            -- Use current native damage bounds for the effect point and range.
+            hitpos=Vector3f.new((bounds.min.x+bounds.max.x)*0.5,
+                bounds.min.y+(bounds.max.y-bounds.min.y)*0.6,(bounds.min.z+bounds.max.z)*0.5)
+        end
+        -- Minecraft already resolves reach/projectile impact. Keep the extra
+        -- stale-proxy distance guard, but do not apply a melee limit to arrows.
+        -- HIT_PROJECTILE=2 / HIT_FIRE=4 in the shared protocol; no enemy rules.
+        local flags=trace.flags or 0
+        assert(finite(flags) and flags>=0 and flags<=4294967295 and flags==math.floor(flags),'Invalid hit flags')
+        local indirect=(flags & 6)~=0
+        local max_distance=indirect and 128 or 10
+        trace.native_distance=math.sqrt(distance_sq);trace.native_range=max_distance
+        if distance_sq>max_distance*max_distance then
+            trace.outcome='rejected';trace.reason='native_hit_out_of_range';return
+        end
+        trace.native_hit_position={x=hitpos.x,y=hitpos.y,z=hitpos.z}
+        trace.native_bounds_source=bounds and bounds.source or 'movement_capsule'
         local dir=nullable(NULLDIR);local av=nullable(NULLVEC);local normal=nullable(NULLVEC)
         local ap=nullable(NULLVEC);local az=nullable(NULLVEC)
         trace.before=get(target_health,'get_Health');trace.requested_damage=damage
         attempted=true
-        local stock=get(entity,DIRECT,p.go,template.weapon,runtime,hitpos,dir,av,normal,ap,az,0,nil)
+        local stock=get(entity,DIRECT,p.go,weapon,runtime,hitpos,dir,av,normal,ap,az,0,nil)
         if not stock then trace.outcome='rejected';trace.reason='native_enqueue_returned_nil';return end
         exact(stock,'app.cStockDamageInfoCharacter')
         assert(same(get(stock,'get_Receiver'),go) and same(get(stock,'get_Attacker'),p.go)
@@ -240,11 +333,11 @@ local function queue(entry,bridge_state,damage,trace)
         trace.error=tostring(e):sub(1,700);failure('queue',e)
         -- Hold trial routing after failure so subsequent clicks cannot silently
         -- switch back to direct health writes during a controlled live test.
-        s.mode='trial';s.trial_remaining=0
+        if s.mode~='enabled' then s.mode='trial';s.trial_remaining=0 end
     end
     return true
 end
-_G.onimusha_enemy_hit={queue=queue}
+_G.onimusha_enemy_hit={queue=queue,busy=function() return next(s.pending)~=nil end}
 local function tick()
     s.frame=s.frame+1
     if s.frame==1 then initialize() end
@@ -255,7 +348,9 @@ local function tick()
             s.control_id=c.id
             if c.mode=='capture' then
                 s.templates={};s.capture_info={};s.captured_ids={};s.selected={};s.mode='capture';s.capture_frame=s.frame
+            elseif c.mode=='enabled' then s.mode='enabled';s.ready=false
             elseif c.mode=='trial' then
+                s.mode='held' -- missing volatile templates must never reopen direct-HP fallback
                 local chosen={}
                 for _,index in ipairs(c.templates or {}) do
                     assert(type(index)=='number' and index==math.floor(index) and s.templates[index],'Invalid selected template')
@@ -265,6 +360,10 @@ local function tick()
                 s.selected=chosen;s.mode='trial';s.trial_remaining=1
             elseif c.mode=='prepared' then s.mode='prepared' end
         end
+    end
+    if s.mode=='enabled' and s.frame%120==1 then
+        local ok,err=pcall(function() resolve_profiles(resolve_player()) end)
+        s.ready=ok;s.prepare_error=not ok and tostring(err):sub(1,700) or nil
     end
     if s.mode=='capture' and s.frame-(s.capture_frame or s.frame)>18000 then s.mode='off' end
     for key,p in pairs(s.pending) do
@@ -277,7 +376,8 @@ local function tick()
     if s.frame%60==0 then
         json.dump_file(OUTPUT,{frame=s.frame,mode=s.mode,initialized=s.initialized==true,
             templates=s.capture_info,selected=s.selected,events=s.events,errors=s.errors,metadata=s.metadata,hooks=s.hooks,
-            control_id=s.control_id,trial_remaining=s.trial_remaining})
+            control_id=s.control_id,trial_remaining=s.trial_remaining,ready=s.ready==true,
+            profiles=s.profile_info,prepare_error=s.prepare_error})
     end
 end
 re.on_application_entry('LateUpdateBehavior',function()

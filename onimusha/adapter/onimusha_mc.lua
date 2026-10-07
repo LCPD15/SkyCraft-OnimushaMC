@@ -5,7 +5,7 @@ local defaults = {
     runtime_stage="A", config_reload_frames=120,
     enabled=false, units_per_block=1.0, tile_stride=8192, collision_radius=16,
     collision_triangles_per_frame=1600, collision_max_triangles=95000,
-    enemy_host_damage_per_mc_point=100.0, max_pose_jump=8.0,
+    enemy_host_damage_per_mc_point=100.0, require_native_enemy_damage=true, max_pose_jump=8.0,
     camera_yaw_sign=-1.0, camera_yaw_offset=180.0, camera_pitch_sign=-1.0,
     camera_fov_radians=false, mirror_native_damage_to_mc=true,
     block_collider_resource="mod/onimusha_mc/unit_box.rcol",
@@ -1708,10 +1708,60 @@ local function apply_combat_write(record,health,delta)
     record.outcome=write.outcome;record.reason=write.reason
     combat_count(record.group,record.outcome,record.reason)
 end
+local function valid_enemy_aabb(box,origin)
+    if not box then return end
+    local lo,hi=box.minpos,box.maxpos
+    if not lo or not hi then return end
+    for _,axis in ipairs({'x','y','z'}) do
+        local a,b=lo[axis],hi[axis]
+        if type(a)~='number' or type(b)~='number' or a~=a or b~=b or math.abs(a)>100000
+            or math.abs(b)>100000 or b<a or b-a>64 then return end
+        if math.abs((a+b)*0.5-origin[axis])>32 then return end
+    end
+    return {min={x=lo.x,y=lo.y,z=lo.z},max={x=hi.x,y=hi.y,z=hi.z}}
+end
+local function enemy_damage_bounds(enemy,origin)
+    -- TYPE_DAMAGE=0 is reflected from this game's enum. Never infer damage
+    -- colliders from monster names, mesh filenames, or attack-volume sizes.
+    return attempt(function()
+        local entity=call(call(enemy,'get_CharacterEntityHolder'),'get_Entity')
+        local components=entity:get_field('<CharacterComponents>k__BackingField')
+        local switch=components:get_field('<ColliderSwitcher>k__BackingField')
+        local rsc=switch:get_field('_RequestSetCollider')
+        local group=call(switch,'getGroupFromType(app.ColliderSwitcher.COLLIDER_TYPE)',0)
+        local group_id=call(group,'get_Id');local count=call(group,'get_NumRequestSets')
+        if not count or count<0 or count>128 then return end
+        local bounds,parts,total=nil,{},0
+        for j=0,count-1 do
+            if call(switch,'isRequestSetActiveFromIndex(app.ColliderSwitcher.COLLIDER_TYPE, System.UInt32)',0,j)==true then
+                local n=call(rsc,'getNumCollidablesFromIndex(System.UInt32, System.UInt32)',group_id,j) or 0
+                if n<0 or n>64 or total+n>128 then return end
+                total=total+n
+                for k=0,n-1 do
+                    local col=call(rsc,'getCollidableFromIndex(System.UInt32, System.UInt32, System.UInt32)',group_id,j,k)
+                    if call(col,'get_Enabled')==true then
+                        local box=valid_enemy_aabb(call(col,'get_BoundingAabb'),origin)
+                        if box then
+                            local ud=call(col,'get_UserData');local parent=call(ud,'get_ParentUserData') or ud
+                            local part=attempt(function() return parent:get_field('_PartsIndex') end)
+                            parts[#parts+1]={min=box.min,max=box.max,part=part}
+                            if not bounds then bounds={min={x=box.min.x,y=box.min.y,z=box.min.z},max={x=box.max.x,y=box.max.y,z=box.max.z}}
+                            else for _,axis in ipairs({'x','y','z'}) do
+                                bounds.min[axis]=math.min(bounds.min[axis],box.min[axis])
+                                bounds.max[axis]=math.max(bounds.max[axis],box.max[axis])
+                            end end
+                        end
+                    end
+                end
+            end
+        end
+        if bounds then bounds.parts=parts;bounds.source='active_damage_colliders';return bounds end
+    end)
+end
 local function publish_actors(s,bridge)
     local actors,live={},{}
     local candidates=scene_components(s,"app.EnemyCharacter")
-    local diagnostic={found=#candidates,valid_go=0,context_resolved=0,health_resolved=0,alive=0}
+    local diagnostic={found=#candidates,valid_go=0,context_resolved=0,health_resolved=0,alive=0,damage_bounds=0,fallback_bounds=0,bounds_samples={}}
     local origin=state.transform:get_position()
     for _,enemy in ipairs(candidates) do
         local go=call(enemy,"get_GameObject")
@@ -1737,8 +1787,21 @@ local function publish_actors(s,bridge)
                     local cc=call(go,"getComponent(System.Type)",td("via.physics.CharacterController"):get_runtime_type())
                     local width=(call(cc,"get_Radius") or 0.45)*2/cfg.units_per_block
                     local height=(call(cc,"get_Height") or 1.8)/cfg.units_per_block
+                    local bounds=dx*dx+dy*dy+dz*dz<=32*32*cfg.units_per_block*cfg.units_per_block and enemy_damage_bounds(enemy,p) or nil
+                    if bounds then
+                        local w=math.max(bounds.max.x-bounds.min.x,bounds.max.z-bounds.min.z)/cfg.units_per_block
+                        local h=(bounds.max.y-bounds.min.y)/cfg.units_per_block
+                        if w>0.02 and h>0.02 then
+                            width=math.min(64,w);height=math.min(64,h)
+                            m=mcpos({x=(bounds.min.x+bounds.max.x)*0.5,y=bounds.min.y,z=(bounds.min.z+bounds.max.z)*0.5})
+                            entry.bounds_native=bounds;diagnostic.damage_bounds=diagnostic.damage_bounds+1
+                        else bounds=nil end
+                    end
+                    if not bounds then diagnostic.fallback_bounds=diagnostic.fallback_bounds+1 end
                     local name=tostring(call(go,"get_Name") or "Onimusha enemy")
                     entry.name=name;entry.position={x=m.x,y=m.y,z=m.z};entry.width=width;entry.height=height
+                    if #diagnostic.bounds_samples<32 then diagnostic.bounds_samples[#diagnostic.bounds_samples+1]={id=id,name=name,
+                        x=m.x,y=m.y,z=m.z,width=width,height=height,source=bounds and bounds.source or 'movement_capsule'} end
                     actors[#actors+1]={id=id,flags=1,x=m.x,y=m.y,z=m.z,yaw=0,width=width,height=height,
                         health_frac=current/maximum,level=1,name=name}
                     if #actors>=96 then break end
@@ -1800,6 +1863,8 @@ local function apply_events(bridge)
                             -- A native request owns its settlement, including ambiguous
                             -- failures. Never add a second direct-health write.
                             combat_count(trace.group,trace.outcome,trace.reason)
+                        elseif cfg.require_native_enemy_damage then
+                            reject_combat_event(trace,"native_enemy_damage_not_ready")
                         else apply_combat_write(trace,entry.health,-damage) end
                     else trace.outcome="noop";trace.reason="zero_damage";combat_count(trace.group,"noop",trace.reason) end
                     break
@@ -2243,10 +2308,15 @@ re.on_draw_ui(function()
         imgui.tree_pop()
     end
 end)
+_G.onimusha_adapter_lifecycle={ready_for_reload=function()
+    return not state.active and not restoration_pending() and not state.hidden
+        and (state.health_bypass or 0)==0
+end}
 re.on_script_reset(function()
     if not cfg.diagnostic_only or restoration_pending() or state.hidden or state.collider_probe or next(state.blocks) then
         fail_open("Script reset");clear_boxes()
     end
     if not cfg.diagnostic_only and _G.onimusha_mc then _G.onimusha_mc.set_enabled(false) end
+    _G.onimusha_adapter_lifecycle=nil
 end)
 log.info("[OnimushaMC] adapter loaded; TDB "..tostring(sdk.get_tdb_version()).."; stage "..cfg.runtime_stage)
