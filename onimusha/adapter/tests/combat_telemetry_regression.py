@@ -208,9 +208,21 @@ return function()
  assert(state.combat.events[1].frame==25 and state.combat.writes[1].frame==25 and state.combat.incoming[1].frame==25)
  assert(count('enemy_hits','received')==40 and count('writes','received')==40 and count('incoming','received')==40)
  passed('three real production telemetry lists retain only latest 16 without capping truthful counters')
+ setup()
+ _G.onimusha_enemy_hit={queue=function(entry,owner,damage,trace)
+  assert(entry.id==9 and owner==state and damage==7*cfg.enemy_host_damage_per_mc_point)
+  trace.outcome='queued_native';return true
+ end}
+ deliver({{type=1,form_id=9,a=7}})
+ assert(latest('events').outcome=='queued_native' and state.actors.enemy.health.setters==0)
+ _G.onimusha_enemy_hit.queue=function(_,_,_,trace) trace.outcome='native_unconfirmed';return true end
+ deliver({{type=1,form_id=9,a=7}})
+ assert(state.actors.enemy.health.setters==0)
+ _G.onimusha_enemy_hit=nil
+ passed('optional native queue owns both success and ambiguous failure without direct HP fallback')
  return cases
 end
 ''')
 count=run()
-assert count==13
+assert count==14
 print(f"COMBAT_TELEMETRY_REGRESSION_OK {count} actual-production cases; LUA54_COMPLETE_SYNTAX_OK")

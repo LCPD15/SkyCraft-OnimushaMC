@@ -2,9 +2,9 @@
 
 当前处于开发和场景接入阶段。更新时间：2026-10-07。本记录只覆盖 OnimushaWotS 的本地版本，不覆盖其他 RE 游戏。
 
-最新用户实测：原游戏敌人攻击能正确扣减MC血量，MC恢复道具能同步恢复双方血量。用户重新确认MC剑击可以扣敌人血，之前因原生世界空间UI冻结、血条没有显示/更新而误判；原生受击反馈仍缺失。9164恢复血条显示与位置移动跟随，但转视角仍不更新；B274被动时序记录定位到原生相机lateUpdate结束时的覆写，候选修正及失败回滚离线验证后仍需实际UI复测。伤害倍率10→100已修改，游戏内平衡待测。方块站立只证明MC玩家碰撞，原生NPC碰撞、真实深度、光照尚未接入。当前绘制层用附近原生碰撞几何重建私有深度，不能代表RE主场景。用户今晚休息，不要求人工操作；下文早期“待验证”为历史状态，以文末表和停点记录为准。
+最新验收：BC6A转向时任务图标和敌人血条正常跟随，F10恢复通过。Lua466822/JAR22004的MC格挡音效、未格挡正常扣血已由用户确认；原生受伤/MC恢复道具双向HP同步正常。7MC→700原生HP已实测，倍率100生效，完整平衡未验收。敌人原生反馈正在进行双模板单击试验，尚未通过。MC方块站立不代表原生NPC碰撞；真正RE深度和光照未接入。
 
-Latest physical report: native damage and MC healing synchronize both pools; sword damage is confirmed, with native hit reactions missing. Lua9164 restored bar visibility and movement tracking, while turning still fails. Passive B274 timing identified the native lateUpdate overwrite; the replay/rollback candidate still needs live UI validation. Enemy scaling10→100 is changed, with balance testing pending. MC-player block support does not establish native NPC collision, actual RE depth or lighting. The user is asleep; manual tests are deferred. Earlier entries are historical; use the final table and resume checkpoint.
+Latest acceptance: turning world-space UI and release passed. Lua466822/JAR22004 passed real blocking sound and ordinary HP loss; healing synchronizes both games. The scale100 HP path is verified, while native enemy hit feedback remains an unverified two-profile experiment. Native NPC block collision and true RE depth/lighting remain unfinished.
 
 2026-10-06 场景加载期间出现一次游戏本体空指针崩溃。当时 MC 未连接、接管未开启、GPU 绘制未初始化；同时启用了新增原生碰撞对象测试，具体根因尚未确认。停用 DLL 和这些测试，仅保留严格只读 Lua 后，用户确认可以正常进入场景。当前默认配置为只读阶段 A，新增原生 Collider/RCOL 创建及零伤害钩子测试均关闭。
 
@@ -96,7 +96,9 @@ After reset, the user passed continuous movement, turning, jumping and traversal
 | MC 方块建造和拆除 | 放置、站上方块、拆除后走过原位置实测通过 / Placement, player collision and removal passed | 原地形不可拆除；NPC实体方块碰撞另列实验项 |
 | 鬼武者实体方块碰撞 | 未实现有效原生碰撞，用户确认无法阻挡敌人；实验创建仍停用 / Native NPC collision failed; experimental creation disabled | 原游戏实体受方块阻挡，拆除和切场景不残留碰撞；不得自动启用未验证创建路径 |
 | MC 战斗 | 用户重新确认剑击扣血；原生受击反馈缺失 / Sword damage confirmed; native reactions missing | 伤害已确认；死亡、受击、硬直和破甲仍须接入/验收；代理日志不能替代原生证据 |
-| 原生世界空间UI | 9164恢复血条显示、移动跟随，但转向仍固定；afterTick同步成功、beforeTick被原生相机覆写；继续时序诊断 / Bars visible and move correctly, but turning still fails; native overwrite timing remains under investigation | 随相机/角色正确重投影，F10关闭后恢复；不得通过隐藏UI冒充修复 |
+| 原生世界空间UI | BC6A原生lateUpdate结束同步后，用户确认转向时任务图标和血条正常跟随，关闭接管恢复 / Turning and release passed | 证据logs/live-camera-bc6a-20261007；更多场景仍需验收 |
+| MC格挡与受击 | Lua466822/JAR22004，用户确认格挡音效及正常扣血 / Block sound and HP loss passed | 红闪、击退、火花、背后攻击和特殊弹反未逐项验收 |
+| 金苹果 | 新增4×64普通金苹果用户已确认 / Four stacks verified | 写入前独占锁定和完整世界备份，禁止重复添加 |
 | 百分比心形血量 | 敌人攻击扣血及MC道具双向治疗用户实测通过 / Native hurt and MC healing passed | 最大血量变化、死亡、盾牌方向及菜单边界下的已拦截伤害仍待验证 |
 | 原场景深度与遮挡 | 私有碰撞深度，用户确认遮挡异常 / Private collision depth; native occlusion failed | 接入真实主场景深度并验证动态角色、装饰、动态分辨率和投影 |
 | 原游戏光照与阴影 | 尚未接入，MC自身亮度不能替代 / Native lighting/shadows not integrated | 验证室内外光照、原生阴影和渲染阶段 |

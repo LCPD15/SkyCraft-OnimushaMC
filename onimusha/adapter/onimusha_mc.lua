@@ -1794,7 +1794,13 @@ local function apply_events(bridge)
                     trace.target_draw_self=call(target_go,"get_DrawSelf")
                     local damage=math.max(0,math.min(1000,event.a or 0))*cfg.enemy_host_damage_per_mc_point
                     trace.mc_damage=event.a;trace.host_damage_scale=cfg.enemy_host_damage_per_mc_point;trace.host_damage=damage
-                    if damage>0 then apply_combat_write(trace,entry.health,-damage)
+                    if damage>0 then
+                        local native_hit=_G.onimusha_enemy_hit
+                        if native_hit and type(native_hit.queue)=="function" and native_hit.queue(entry,state,damage,trace) then
+                            -- A native request owns its settlement, including ambiguous
+                            -- failures. Never add a second direct-health write.
+                            combat_count(trace.group,trace.outcome,trace.reason)
+                        else apply_combat_write(trace,entry.health,-damage) end
                     else trace.outcome="noop";trace.reason="zero_damage";combat_count(trace.group,"noop",trace.reason) end
                     break
                 end
@@ -1828,6 +1834,87 @@ local function install_hooks()
     local hp=td("app.cHealthManager")
     state.hooks.setHealth={method="setHealth",attempted=false,
         reason="Current REFramework failed to hook this method's JIT thunk in the first live test; commit calls remain available"}
+    -- In TDB82 execThirdDamage encloses the real HP mutation (natural capture
+    -- combat-flow-user-confirmed-04). Keep only scalar source identities for
+    -- that synchronous call; never borrow cApplyParam/stock across frames.
+    local hit_contexts={}
+    local source_record={method="execThirdDamage",attempted=false,calls=0,owned_calls=0,matched_sources=0}
+    state.hooks.hurt_source=source_record
+    local function current_hit_source()
+        if not thread or not thread.get_hash then return nil end
+        local stack=hit_contexts[tostring(thread.get_hash())]
+        local hit=stack and stack[#stack]
+        if not hit or hit.frame~=state.frame or hit.epoch~=state.epoch or not state.active
+            or hit.player~=addr(state.player) or hit.health~=addr(state.health) then return nil end
+        for _,actor in pairs(state.actors or {}) do
+            local go=call(actor.obj,"get_GameObject")
+            if actor.id==hit.actor and addr(actor.obj)==hit.character and go
+                and call(go,"get_Valid")==true and addr(go)==hit.gameobject then return hit end
+        end
+        return nil
+    end
+    local source_ok,source_error=pcall(function()
+        assert(sdk.get_tdb_version and sdk.get_tdb_version()==82 and thread and thread.get_hook_storage,
+            "Synchronous hit source requires TDB82 and hook storage")
+        local apply_name="app.cCharacterApplyDamage.cApplyParam"
+        local param_type=assert(td(apply_name))
+        assert(not param_type:is_value_type() and not param_type:is_by_ref() and not param_type:is_pointer())
+        local source_method=assert(td("app.cCharacterApplyDamage"):get_method("execThirdDamage("..apply_name..")"))
+        assert(not source_method:is_static() and source_method:get_num_params()==1
+            and source_method:get_param_types()[1]:get_full_name()==apply_name
+            and source_method:get_declaring_type():get_full_name()=="app.cCharacterApplyDamage"
+            and source_method:get_return_type():get_full_name()=="System.Void")
+        source_record.attempted=true;source_record.address=tostring(source_method:get_function())
+        sdk.hook(source_method,function(args)
+            source_record.calls=source_record.calls+1
+            local storage=thread.get_hook_storage();storage.onimusha_mc_hit_source=nil
+            if not state.active or not state.player or not state.health then return end
+            local ok,err=pcall(function()
+                local holder=call(state.player,"get_CharacterEntityHolder")
+                local entity=call(holder,"get_Entity")
+                if not entity or not same(call(entity,"get_OwnerCharacter"),state.player) then return end
+                local damage=entity:get_field("_DamageInterface")
+                if not damage or sdk.to_int64(args[2])~=addr(damage) then return end
+                if typename(damage)~="app.cPlayerApplyDamage" or call(damage,"get_Valid")~=true
+                    or call(damage,"get_IsDestroy")~=false or not same(call(damage,"get_OwnerCharacter"),state.player) then return end
+                local key=tostring(thread.get_hash());local stack=hit_contexts[key] or {}
+                assert(#stack<16,"Unexpected native damage recursion")
+                -- Push even an unresolved inner hit, masking the outer source.
+                local token={frame=state.frame,epoch=state.epoch,player=addr(state.player),health=addr(state.health)}
+                stack[#stack+1]=token;hit_contexts[key]=stack
+                storage.onimusha_mc_hit_source={key=key,token=token}
+                source_record.owned_calls=source_record.owned_calls+1
+                if sdk.is_managed_object(args[3])~=true then return end
+                local param=sdk.to_managed_object(args[3])
+                if not param or not param:get_type_definition():is_a(apply_name) then return end
+                local stock=param:get_field("DamageInfo")
+                if not stock or not stock:get_type_definition():is_a("app.cStockDamageInfoCharacter")
+                    or not same(call(stock,"get_Receiver"),state.player_go) then return end
+                local attacker=call(stock,"get_Attacker")
+                if not attacker or call(attacker,"get_Valid")~=true then return end
+                for _,actor in pairs(state.actors or {}) do
+                    if same(call(actor.obj,"get_GameObject"),attacker) then
+                        token.actor=actor.id;token.character=addr(actor.obj);token.gameobject=addr(attacker)
+                        source_record.matched_sources=source_record.matched_sources+1
+                        return
+                    end
+                end
+            end)
+            if not ok then source_record.error=tostring(err):sub(1,400) end
+            -- Direction metadata only: never suppress native damage stages.
+        end,function(retval)
+            local storage=thread.get_hook_storage();local saved=storage.onimusha_mc_hit_source
+            storage.onimusha_mc_hit_source=nil
+            if saved then
+                local stack=hit_contexts[saved.key]
+                if stack and stack[#stack]==saved.token then
+                    table.remove(stack);if #stack==0 then hit_contexts[saved.key]=nil end
+                else hit_contexts[saved.key]=nil;source_record.error="Unbalanced native hit context" end
+            end
+            return retval
+        end)
+    end)
+    if not source_ok then source_record.error=tostring(source_error):sub(1,400) end
     for _,name in ipairs({"addHealth(System.Int32, System.Boolean)","set_Health(System.Int32)"}) do
         local m=hp and hp:get_method(name)
         if m then
@@ -1871,7 +1958,10 @@ local function install_hooks()
                 end
                 if delta<0 then
                     combat_count("incoming","attempted")
-                    local accepted=bridge.send_hurt({kind=0,mc_points=-delta/maximum*20,attacker_id=0,flags=4})
+                    local hit=current_hit_source()
+                    local attacker_id=hit and hit.actor or 0
+                    incoming.attacker_id=attacker_id;incoming.source_verified=hit~=nil
+                    local accepted=bridge.send_hurt({kind=0,mc_points=-delta/maximum*20,attacker_id=attacker_id,flags=4})
                     incoming.accepted=not not accepted;incoming.outcome=accepted and "accepted" or "rejected"
                     incoming.reason=not accepted and "bridge_rejected" or nil
                     combat_count("incoming",incoming.outcome,incoming.reason)

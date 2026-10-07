@@ -8,6 +8,7 @@ param(
     [switch]$ShowWindow,
     [switch]$StartHidden,
     [switch]$QuitWithHost,
+    [switch]$SwordBlocking,
     [switch]$PrepareOnly,
     [switch]$Wait
 )
@@ -100,6 +101,7 @@ $taskArgs = @(
 $taskArgs = @($taskLoader.arguments.jvm | Where-Object { $_ -is [string] -and $_.StartsWith('-DFabricMcEmu=') }) + $taskArgs
 if ($ShowWindow) { $taskArgs = @('-Dskycraft.showWindow=true') + $taskArgs }
 if ($StartHidden) { $taskArgs = @('-Dskycraft.startHidden=true') + $taskArgs }
+if ($SwordBlocking) { $taskArgs = @('-Donimusha.swordBlocking=true') + $taskArgs }
 function ConvertTo-JavaArgfileToken([string]$taskValue) {
     # Java argfiles have their own escaping; never use shell interpolation for these arguments.
     return '"' + $taskValue.Replace('\', '\\').Replace('"', '\"') + '"'
@@ -116,7 +118,12 @@ if ($PrepareOnly) {
 $taskExistingPidFile = Join-Path $ProjectRoot 'runtime\minecraft\minecraft-dev.pid'
 if (Test-Path -LiteralPath $taskExistingPidFile) {
     $taskOldPid = [int](Get-Content -LiteralPath $taskExistingPidFile -Raw).Trim()
-    if (Get-Process -Id $taskOldPid -ErrorAction SilentlyContinue) { throw "Developer Minecraft already running (PID $taskOldPid)." }
+    $taskOldProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$taskOldPid" -ErrorAction SilentlyContinue
+    # Windows reuses PIDs. A stale file must not mistake another application for MC.
+    if ($taskOldProcess -and $taskOldProcess.ExecutablePath -eq $taskJava -and
+        $taskOldProcess.CommandLine -and $taskOldProcess.CommandLine.IndexOf($taskArgfile, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        throw "Developer Minecraft already running (PID $taskOldPid)."
+    }
 }
 $taskProcess = Start-Process -FilePath $taskJava -ArgumentList ('@' + $taskArgfile) -WorkingDirectory $taskGameRoot -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput (Join-Path $taskLogRoot "$LogPrefix.stdout.log") -RedirectStandardError (Join-Path $taskLogRoot "$LogPrefix.stderr.log")

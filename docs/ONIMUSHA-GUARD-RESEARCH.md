@@ -4,7 +4,11 @@
 
 用户要求：MC 右键举盾，或有格挡能力的剑等物品，应真正进入 MC 格挡结算；完全格挡时不扣血，并产生一次格挡声音和可见反馈。原生玩家隐藏绘制后，也应保留正确的原生受击／格挡行为。下面区分静态接口证据、MC 字节码证据和仍需自然样本的原生行为；本调查没有调用格挡动作、伤害工厂或声音／特效请求。
 
-**English conclusion:** Minecraft shield blocking is part of the vanilla damage pipeline, but the current attacker-less generic damage source does not provide the direction needed for a front-facing block. Minecraft swords do not block by default. Native Onimusha guard methods exist, but safe action requests, damage-parameter ownership and native feedback have not yet been verified in a natural guard sample. Hiding native drawing does not establish that its guard state remains usable under takeover.
+2026-10-07下午用户明确：MC侧普通成功格挡只需格挡效果且不扣血，不需要消耗鬼武者力动。特殊不可防御攻击需弹反，暂时不做。敌人与MC角色的受击反馈都要处理。此要求不等于把未知来源或所有方向的命中强制判定为成功格挡。
+
+自然格挡、同次stock来源和玩家扣血阶段采样已完成，详见文末实测补记；未主动调用动作、工厂或反馈请求。
+
+**English conclusion:** Minecraft shield blocking uses vanilla directional damage rules. TDB82 natural-hit samples now prove the same-call stock record contains the attacker and receiver, and `execThirdDamage` encloses the player HP mutation. Lua466822 supplies that generic source through the existing actor table; no per-enemy or per-animation logic is used. JAR22004 adds observed vanilla guard feedback and optional sword blocking. These versions have now passed a real Fabric boot and the user's live block/sound and ordinary HP-loss test. Red flash, knockback and sparks have not been individually confirmed. Native enemy reactions and a durable zero-damage settlement acknowledgement remain separate unfinished work.
 
 ## 证据来源与验证边界
 
@@ -117,7 +121,7 @@
 
 盾有 `BLOCKS_ATTACKS`，默认延迟 0.25 秒，即 5 个 MC tick；字节码中正面 90° 条件内的默认 factor=1 可全额减免。`LivingEntity.hurtServer` 已经过 `applyItemBlocking`，不需要另调用一次。其伤害来源位置为空时按角度 π 判断，无法满足该正面条件。
 
-当前 Lua 传入 `bridge.send_hurt({kind=0, mc_points=..., attacker_id=0, flags=4})`。Java `SkyCombat.hurtPlayer` 没有攻击者时使用 `damageSources().generic()`；有真实 actor 时才可选择相应带来源的伤害。首先需要从同一次原生命中获得可信攻击者，并匹配当前 actor 注册表；仅填一个附近敌人的 ID 会错误改变背后／远程攻击的方向。
+旧Lua BC6A及之前始终传入`attacker_id=0`。Lua466822从同一次同步扣血调用中核对stock接收者和当前actor表后传真实ID；无法匹配时仍为0。Java `SkyCombat.hurtPlayer`没有攻击者时使用`damageSources().generic()`，有真实actor时才选择带来源的伤害。该机制对敌人共用，不需要逐招式适配，不选择“附近最近敌人”代替来源。
 
 MC 剑的 `applySwordProperties` 添加 TOOL、攻击属性和 WEAPON，没有 `BLOCKS_ATTACKS`；默认 `Item.use` 返回 PASS。因此剑的右键格挡需要明确增加物品能力及使用逻辑，且应保留“主手剑＋副手盾”时盾的使用优先级。举起模型、播放 BLOCK 动画或 `hurtServer` 返回 false 都不单独证明成功格挡。
 
@@ -143,9 +147,9 @@ Vanilla `BlocksAttacks.onBlocked` 已播放一次 `SHIELD_BLOCK`，没有粒子�
 
 实现后的验收需分别覆盖：盾延迟与正面全挡 0 HP、背后及不可格挡攻击正常伤害、剑能力与副手盾优先、声音／粒子各一次、会话或 epoch 变化不吞伤不重扣、F10 关闭正常恢复，以及隐藏原生玩家时的真实原生 guard 行为。任何尚未验证的条目不得写成已支持。
 
-## 独立四钩子探针计划（未创建／未部署）
+## 独立四钩子探针设计（下方保留原设计，已实现）
 
-候选文件名为 `onimusha_guard_probe.lua`，与生产适配器分开，不竞争或修改现有 Lua。当前只有计划；下一次观察仍需先审查探针候选和无副作用回归，不能把本节当作已经安装。
+文件为 `onimusha/adapter/onimusha_guard_probe.lua`，与生产适配器分开。已实现、部署并获得首轮有效自然样本。更新版新增同次DamageInfo字段读取和静态战斗metadata导出，17组回归通过，新增部分等待下一次进场景采样；不能把先前版本的实景结果继承给未测的新字段读取。
 
 1. 默认不记录，仅显式 arm。要求原生玩家已入普通场景、桥接 `enabled/active=false`（F10关闭）、stage/owner稳定。只读核对 PlayerManager→PlayerInfo→PlayerCharacter→EntityHolder→实际 `app.cPlayerCharacterEntity`，实体及 `_DamageInterface`／GuardController 的 owner 均指向同一玩家。读取真实 Input.IsGuard、CommandResult.IsGuard、持续GuardController.IsGuard与BattleInfo。探针不能自动切F10或请求格挡。
 2. 同时最多四个 hook：`app.cPlayerApplyDamage.doApplyStockDamage(app.cCharacterApplyDamage.cApplyParam) → System.Void`；`app.cCharacterApplyDamage.isEnableGuardDamage(app.cCharacterApplyDamage.cApplyParam) → System.Boolean`；`app.cCharacterApplyDamage.applyGuardDamageReaction(app.cCharacterApplyDamage.cApplyParam) → System.Void`；`app.cCharacterApplyDamage.applyHitSound(app.cCharacterApplyDamage.cApplyParam) → System.Void`。特效另轮以 `applyHitEffect` 替换第四项，不增加第五hook。确认真实function地址、declaring type、参数和返回类型，避免重复同一实现地址。
@@ -155,6 +159,25 @@ Vanilla `BlocksAttacks.onBlocked` 已播放一次 `SHIELD_BLOCK`，没有粒子�
 6. 首轮由用户自然执行普通正面guard与普通受击；记录输入请求→真实guard状态→伤害入口→guard判断→反应/声音→HP变化的实际顺序。背后、不可格挡、一闪分轮观察。声音hook出现也不自动证明某个事件ID就是格挡声；必要时关联已存在对象的真实事件身份。
 
 这条观察路线可以帮助替换当前 `attacker_id=0`：必须把**同一次**原生命中的Attacker匹配当前actor registry，并使用其可信位置构造MC伤害来源。当前HealthManager写入hook只能看见HP变化，本身不能代表已经被原生全挡、HP为零变化的完整命中。后续仍需接受／零伤害结算事务与dedupe，不能重复调用 `doApplyStockDamage` 或既走原生扣血又走MC扣血。
+
+## 2026-10-07下午实测补记
+
+`logs/live-camera-bc6a-20261007/guard-user-confirmed-02.json`保留26条自然pre/post记录：
+
+- cApplyParam已由真实TDB证明为引用类型；四个函数都真正调用并命中认证玩家模块。原始返回值、调用顺序、HP和标量快照保留，无读取错误。
+- UniqueID18、frame943：持续guard=true，isEnableGuardDamage两次返回true；applyGuardDamageReaction一次、applyHitSound一次；HP1406→1406、HealthDecrease0、RikidoDecrease342。
+- UniqueID19、frame970：guard=false，判定false；进入doApplyStockDamage前HP已从1406变981，HealthDecrease425；声音入口一次。说明该回调不能被当作最早HP结算入口。
+- UniqueID20、frame1041：用户标记为暂缓的特殊不可防御攻击；HP981→96，HealthDecrease885。未采集到可信属性位，不能凭伤害大小实现不可防御识别。
+- BattleInfo.get_ApplyParam与当前参数全部不匹配，没有捏造攻击者信息。参数自身的DamageInfo字段类型为app.cStockDamageInfoCharacter，新增只读版本将从该同次字段验证攻击者及向量。
+- 第一轮因过严地要求MC host_ready而提前停止，没有有效样本。第二轮只要求F10关闭并验证真实场景、玩家与模块所有者；host_ready是MC接管条件，不能用于排除正常原生战斗。
+
+截至此记录，MC格挡来源、结算ACK、敌人原生反应请求和双方受击反馈尚未完成。MC导出器已有第三人称红色受击overlay转换；第一人称原版hurt camera tilt尚未在RE相机协议中传输，不能把已有hurtServer调用等同于所有视觉反馈均验收。
+
+## MC实景验收05
+
+用户确认“格挡正常，有音效，受击也能正确扣血”，随后F10关闭、恢复正常。Lua466822 / JAR22004 / DLL5291：6次真实格挡日志均blocked=incoming、blockingCalls=1，HP不变；两次未格挡hurt=true，同击来源actor4/18均匹配，后一击EV6使原生HP1756→1615。新JAR已实际启动，无Mixin初始化错误，剑能力开关已启用。
+
+证据：logs/live-camera-bc6a-20261007/combat-source-guard-active-05.json、combat-source-user-restored-05.json，以及live-guard-feedback-20261007.stdout.log。此结果不替代敌人受击、背后格挡、特殊弹反、粒子/红闪/击退及跨会话ACK验收。
 
 ## Credit
 
