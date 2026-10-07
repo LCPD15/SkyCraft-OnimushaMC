@@ -24,7 +24,7 @@ class Section:
         return tuple(c * 16 for c in self.key)
 
 
-def decode_section(data):
+def decode_section(data, strict=True):
     if len(data) < HEADER.size:
         raise ValueError('Missing section header')
     x, y, z, count = HEADER.unpack_from(data)
@@ -42,9 +42,9 @@ def decode_section(data):
             raise ValueError('Vertex outside bounded section-local range')
         if any(a < 0 or a > 1 for a in v[3:5]):
             raise ValueError('UV outside atlas')
-        if v[5] != 0xffffffff:
+        if strict and v[5] != 0xffffffff:
             raise ValueError('Tint / AO / vertex alpha needs a separately verified native material')
-        if v[7] & ~0x71 or (v[7] >> 4) > 6:
+        if v[7] & ~(0x71 if strict else 0x73) or (v[7] >> 4) > 6:
             raise ValueError('Blended or unknown vertex flags')
         if (v[6] & ~0x0f0f):
             raise ValueError('Invalid MC light encoding')

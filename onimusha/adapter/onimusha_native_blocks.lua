@@ -123,6 +123,8 @@ function api.update(c)
 end
 function api.stop() clear('disabled') end
 function api.busy() return next(q.blocks)~=nil or #q.retired>0 end
+-- Display borrows the already owned collider object; its lifetime remains here.
+function api.display_owner(x,y,z) return q.blocks[x..':'..y..':'..z] end
 function api.status()
     local count,ready=0,0;for _,b in pairs(q.blocks) do count=count+1;if b.ready then ready=ready+1 end end
     return {phase=q.phase,error=q.error,count=count,ready=ready,retiring=#q.retired,desired=#q.order,

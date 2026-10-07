@@ -13,7 +13,7 @@
 namespace skycraft::proto
 {
 	inline constexpr std::uint32_t kMagic = 0x43594B53;  // "SKYC"
-	inline constexpr std::uint32_t kVersion = 13;
+	inline constexpr std::uint32_t kVersion = 14;
 	inline constexpr wchar_t       kMappingName[] = L"Local\\OnimushaMC_v1";
 
 	// 1 Minecraft block == 70 Skyrim units (Skyrim player ~128 units tall, MC player 1.8 blocks).
@@ -522,6 +522,7 @@ namespace skycraft::proto
 		std::uint32_t light;    // low byte: block light 0-15, next byte: sky light 0-15
 		std::uint32_t flags;    // bit0: cutout (alpha test), bit1: translucent,
 		                        // bits 4-6: face normal as MC Direction ordinal + 1 (0 = none: lit without a normal)
+		                        // v14 bits 8-15: Onimusha prebuilt vanilla cube kind 1..16 (0 = overlay only).
 	};
 	static_assert(sizeof(RenVertex) == 32);
 

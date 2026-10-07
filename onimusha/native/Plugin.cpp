@@ -2,6 +2,7 @@
 #include "CollisionPacking.hpp"
 #include "InputRouting.hpp"
 #include "Renderer.hpp"
+#include "NativeSectionMailbox.hpp"
 #include "vendor/reframework/API.h"
 extern "C" {
 #include "vendor/lua/lua.h"
@@ -21,6 +22,7 @@ namespace {
 std::mutex mutex;
 Bridge bridge;
 RenderStore store;
+NativeSectionMailbox sectionMailbox;
 OverlayFrame overlay;
 CameraState camera;
 proto::SkyState host{};
@@ -135,7 +137,7 @@ int drain_events(lua_State* L){
     std::scoped_lock lock(mutex);auto events=bridge.events();lua_createtable(L,int(events.size()),0);int i=1;
     for(const auto& e:events){lua_createtable(L,0,9);nfield(L,"type",e.type);nfield(L,"form_id",e.formId);nfield(L,"a",e.a);nfield(L,"b",e.b);nfield(L,"c",e.c);nfield(L,"d",e.d);nfield(L,"flags",e.flags);nfield(L,"weapon",e.weapon);nfield(L,"epoch",e.weapon);lua_rawseti(L,-2,i++);}return 1;
 }
-int set_enabled(lua_State* L){std::scoped_lock lock(mutex);enabled=lua_toboolean(L,1)!=0;if(!enabled)release();lua_pushboolean(L,enabled);return 1;}
+int set_enabled(lua_State* L){std::scoped_lock lock(mutex);enabled=lua_toboolean(L,1)!=0;if(!enabled){release();store.invalidate_native_views();}lua_pushboolean(L,enabled);return 1;}
 int send_hurt(lua_State* L){
     if(!lua_istable(L,1)){lua_pushboolean(L,false);return 1;}std::scoped_lock lock(mutex);
     const auto points=std::clamp(number(L,1,"mc_points"),0.0,10000.0);const auto kind=std::uint16_t(std::clamp(number(L,1,"kind"),0.0,3.0));
@@ -211,15 +213,85 @@ int snapshot_cubes(lua_State* L){
     for(const auto&p:snapshot.rows){lua_createtable(L,0,3);nfield(L,"x",p.x);nfield(L,"y",p.y);nfield(L,"z",p.z);lua_rawseti(L,-2,i++);}
     lua_setfield(L,-2,"cubes");return 1;
 }
+bool section_key(lua_State*L,SectionKey&k,std::uint64_t&rev){
+    double x{},y{},z{},r{},epoch{};
+    if(!lua_istable(L,1)||!valid_number(L,1,"sx",x)||!valid_number(L,1,"sy",y)||!valid_number(L,1,"sz",z)
+        ||!valid_number(L,1,"revision",r)||!valid_number(L,1,"epoch",epoch)||epoch!=host.collisionEpoch
+        ||std::abs(x)>1000000||std::abs(y)>1000000||std::abs(z)>1000000||x!=std::floor(x)||y!=std::floor(y)||z!=std::floor(z)||r<1||r>9007199254740991.||r!=std::floor(r))return false;
+    k={int(x),int(y),int(z)};rev=std::uint64_t(r);return true;
+}
+int snapshot_sections(lua_State*L){
+    std::scoped_lock lock(mutex);sectionMailbox.busy();
+    lua_createtable(L,0,8);ifield(L,"host_pid",GetCurrentProcessId());bfield(L,"ready",active()&&store.cubeCleared);ifield(L,"world_id",store.cubeWorld);ifield(L,"epoch",store.cubeEpoch);
+    ifield(L,"mc_pid",store.cubePid);ifield(L,"generation",store.cubeGeneration);ifield(L,"jobs",sectionMailbox.count());sfield(L,"error",sectionMailbox.error.c_str());
+    std::vector<std::pair<double,SectionKey>> rows;
+    if(active()&&store.cubeCleared)for(const auto&[k,m]:store.sections){
+        double dx=std::max(0.,std::abs(double(k.x)*16+8-mc.x)-8),dy=std::max(0.,std::abs(double(k.y)*16+8-mc.y)-8),dz=std::max(0.,std::abs(double(k.z)*16+8-mc.z)-8);
+        const double d=dx*dx+dy*dy+dz*dz;if(d<48*48&&m.vertices.size()<=196608)rows.push_back({d,k});
+    }
+    std::sort(rows.begin(),rows.end());if(rows.size()>16)rows.resize(16);
+    lua_createtable(L,int(rows.size()),0);int index=1;for(const auto&[d,k]:rows){const auto&m=store.sections.at(k);lua_createtable(L,0,5);
+        nfield(L,"sx",k.x);nfield(L,"sy",k.y);nfield(L,"sz",k.z);ifield(L,"revision",m.nativeRevision);ifield(L,"vertices",m.vertices.size());lua_rawseti(L,-2,index++);}
+    lua_setfield(L,-2,"sections");return 1;
+}
+int capture_section(lua_State*L){
+    std::scoped_lock lock(mutex);SectionKey k;std::uint64_t rev{};
+    if(!active()||!section_key(L,k,rev)){lua_pushnil(L);return 1;}
+    wchar_t path[32768]{};GetModuleFileNameW(nullptr,path,32768);
+    const auto root=std::filesystem::path(path).parent_path()/L"reframework/data/onimusha_mc/native_sections";
+    try{const auto id=sectionMailbox.request(root,store,k,rev);if(id.empty())lua_pushnil(L);else lua_pushstring(L,id.c_str());}
+    catch(const std::exception&e){sectionMailbox.error=e.what();lua_pushnil(L);}return 1;
+}
+int ack_section(lua_State*L){
+    std::scoped_lock lock(mutex);SectionKey k;std::uint64_t rev{};bool ok=false;
+    if(active()&&section_key(L,k,rev)){
+        lua_getfield(L,1,"mask");std::size_t len{};const char*hex=lua_tolstring(L,-1,&len);
+        if(hex&&len>0&&len<=16384&&len%2==0){
+            std::vector<std::uint8_t>mask;mask.reserve(len/2);bool valid=true;
+            auto digit=[](char c){return c>='0'&&c<='9'?c-'0':c>='a'&&c<='f'?c-'a'+10:-1;};
+            for(std::size_t i=0;i<len;i+=2){const int a=digit(hex[i]),b=digit(hex[i+1]);if(a<0||b<0){valid=false;break;}mask.push_back(std::uint8_t(a*16+b));}
+            if(valid)ok=store.accept_native_section(k,rev,mask,GetTickCount64());
+        }lua_pop(L,1);
+    }lua_pushboolean(L,ok);return 1;
+}
+int release_section(lua_State*L){
+    std::scoped_lock lock(mutex);SectionKey k;std::uint64_t rev{};
+    if(lua_isnoneornil(L,1))store.invalidate_native_views();
+    else if(section_key(L,k,rev)){auto it=store.nativeViews.find(k);if(it!=store.nativeViews.end()&&it->second.sourceRevision==rev)store.nativeViews.erase(it);}
+    return 0;
+}
+int snapshot_instances(lua_State*L){
+    std::scoped_lock lock(mutex);const bool valid=active()&&store.cubeCleared;const auto rows=valid?store.nearby_instances(mc.x,mc.y,mc.z):std::vector<NativeCube>{};
+    lua_createtable(L,0,8);bfield(L,"ready",valid);ifield(L,"world_id",store.cubeWorld);ifield(L,"epoch",store.cubeEpoch);ifield(L,"mc_pid",store.cubePid);ifield(L,"generation",store.cubeGeneration);
+    lua_createtable(L,int(rows.size()),0);int i=1;for(auto p:rows){lua_createtable(L,0,4);nfield(L,"x",p.x);nfield(L,"y",p.y);nfield(L,"z",p.z);nfield(L,"kind",p.kind);lua_rawseti(L,-2,i++);}lua_setfield(L,-2,"cubes");return 1;
+}
+int ack_instances(lua_State*L){
+    std::scoped_lock lock(mutex);bool ok=false;
+    if(active()&&lua_istable(L,1)&&number(L,1,"epoch",-1)==host.collisionEpoch){
+        lua_getfield(L,1,"cubes");const int table=lua_gettop(L);const auto count=lua_rawlen(L,table);
+        if(lua_istable(L,table)&&count<=1280){std::vector<NativeCube>rows;bool valid=true;
+            for(std::size_t i=1;i<=count;i++){
+                lua_rawgeti(L,table,i);double x{},y{},z{},kind{};const int t=lua_gettop(L);
+                if(!lua_istable(L,t)||!valid_number(L,t,"x",x)||!valid_number(L,t,"y",y)||!valid_number(L,t,"z",z)||!valid_number(L,t,"kind",kind)
+                    ||std::abs(x)>16000000||std::abs(y)>16000000||std::abs(z)>16000000||kind<1||kind>16||x!=std::floor(x)||y!=std::floor(y)||z!=std::floor(z)||kind!=std::floor(kind))valid=false;
+                if(valid)rows.push_back({int(x),int(y),int(z),std::uint32_t(kind)});lua_pop(L,1);
+            }if(valid)ok=store.accept_instances(rows,GetTickCount64());
+        }lua_pop(L,1);
+    }lua_pushboolean(L,ok);return 1;
+}
 int set_camera(lua_State* L){
     if(!lua_istable(L,1)){lua_pushboolean(L,false);return 1;}std::scoped_lock lock(mutex);CameraState c{};c.origin[0]=number(L,1,"origin_x");c.origin[1]=number(L,1,"origin_y");c.origin[2]=number(L,1,"origin_z");c.valid=boolean(L,1,"valid");lua_getfield(L,1,"view_proj");bool matrix=lua_istable(L,-1)&&lua_rawlen(L,-1)==16;if(matrix){for(int i=0;i<16;i++){lua_rawgeti(L,-1,i+1);int ok{};const double v=lua_tonumberx(L,-1,&ok);if(!ok||!std::isfinite(v))matrix=false;c.viewProj[i]=float(v);lua_pop(L,1);}}lua_pop(L,1);c.valid=c.valid&&matrix;camera=c;cameraReady=boolean(L,1,"binding_ready",c.valid);lua_pushboolean(L,cameraReady);return 1;
 }
 void on_lua(lua_State* L){
     const auto v=lua_version(L);if(v!=504){api->functions->log_error("OnimushaMC: incompatible Lua ABI %f",v);return;}
     static const luaL_Reg functions[]={{"submit_host",submit},{"tick_host",submit},{"read_mc",read_mc},{"get_mc_state",read_mc},{"drain_events",drain_events},{"poll_events",drain_events},{"set_enabled",set_enabled},{"send_hurt",send_hurt},{"status",status},{"publish_actors",publish_actors},{"publish_collision_tris",publish_tris},{"drain_solids",drain_solids},{"set_camera",set_camera},{nullptr,nullptr}};
-    luaL_newlib(L,functions);lua_pushcfunction(L,snapshot_cubes);lua_setfield(L,-2,"snapshot_full_cubes");lua_setglobal(L,"onimusha_mc");api->functions->log_info("OnimushaMC: Lua bridge registered; takeover disabled until adapter passes bindings");
+    luaL_newlib(L,functions);lua_pushcfunction(L,snapshot_cubes);lua_setfield(L,-2,"snapshot_full_cubes");
+    lua_pushcfunction(L,snapshot_sections);lua_setfield(L,-2,"snapshot_sections");lua_pushcfunction(L,capture_section);lua_setfield(L,-2,"capture_section");
+    lua_pushcfunction(L,ack_section);lua_setfield(L,-2,"ack_section");lua_pushcfunction(L,release_section);lua_setfield(L,-2,"release_section");
+    lua_pushcfunction(L,snapshot_instances);lua_setfield(L,-2,"snapshot_native_instances");lua_pushcfunction(L,ack_instances);lua_setfield(L,-2,"ack_native_instances");
+    lua_setglobal(L,"onimusha_mc");api->functions->log_info("OnimushaMC: Lua bridge registered; takeover disabled until adapter passes bindings");
 }
-void on_lua_destroyed(lua_State*){std::scoped_lock lock(mutex);enabled=ready=collisionReady=cameraReady=false;bridge.invalidate_collision();release();host.flags=0;bridge.publish_host(host);}
+void on_lua_destroyed(lua_State*){std::scoped_lock lock(mutex);enabled=ready=collisionReady=cameraReady=false;store.invalidate_native_views();bridge.invalidate_collision();release();host.flags=0;bridge.publish_host(host);}
 void on_present(){
     std::scoped_lock lock(mutex);bridge.heartbeat();
     const auto context=bridge.collision_status();store.set_cube_context(host.worldId,host.collisionEpoch,context.mcPid,context.generation,context.connected);
@@ -242,7 +314,7 @@ bool on_message(void* hwnd,unsigned int message,unsigned long long wparam,long l
     std::scoped_lock lock(mutex);window=static_cast<HWND>(hwnd);
     if(message==WM_KILLFOCUS||message==WM_ACTIVATEAPP&&!wparam){release();return true;}
     const auto toggle=f10_key_action(message,wparam,lparam);
-    if(toggle!=ToggleKeyAction::pass){if(toggle==ToggleKeyAction::toggle){enabled=!enabled;release();}return false;}
+    if(toggle!=ToggleKeyAction::pass){if(toggle==ToggleKeyAction::toggle){enabled=!enabled;release();if(!enabled)store.invalidate_native_views();}return false;}
     const bool route=active()&&GetForegroundWindow()==window;
     if(!route){if(routed||mouseRouter.known_mode())release();return true;}
     const bool screenOpen=(mc.flags&proto::kMcScreenOpen)!=0;

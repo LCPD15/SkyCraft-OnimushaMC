@@ -50,6 +50,7 @@ struct GpuMesh {
 };
 std::map<std::uint32_t,GpuTexture> textures;
 std::map<SectionKey,GpuMesh> sections;
+std::map<SectionKey,GpuMesh> nativeDepth;
 GpuTexture atlas, hud;
 GpuMesh avatar, scene, terrain, blendedWorld;
 UINT width{},height{};
@@ -313,7 +314,7 @@ bool prepare() {
 }
 void reset() {
     if(context){context->ClearState();context->Flush();}
-    terrain={};avatar={};scene={};blendedWorld={};atlas={};hud={};textures.clear();sections.clear();targets.clear();
+    terrain={};avatar={};scene={};blendedWorld={};atlas={};hud={};textures.clear();sections.clear();nativeDepth.clear();targets.clear();
     depthView.Reset();depthTexture.Reset();worldVs.Reset();worldPs.Reset();overlayVs.Reset();overlayPs.Reset();layout.Reset();paramsBuffer.Reset();sampler.Reset();raster.Reset();depthWrite.Reset();depthRead.Reset();depthOff.Reset();solidBlend.Reset();straightAlpha.Reset();premultiplied.Reset();colorOff.Reset();
     interop.Reset();context.Reset();device.Reset();swapchain.Reset();width=height=0;lastHud=lastTerrain=blendedRevision=0;failed=false;
 }
@@ -352,11 +353,25 @@ void render(const RenderStore& store,const OverlayFrame& overlay,const proto::Mc
             context->Draw(static_cast<UINT>(store.collisionTriangles.size()*3),0);context->PSSetShader(worldPs.Get(),nullptr,0);
         }
     }
+    const auto nativeLeaseNow=GetTickCount64();
+    // RE draws native blocks before Present. Preserve their exact opaque geometry in
+    // the private depth prepass so overlay avatars/items/glass cannot draw through them.
+    context->OMSetBlendState(colorOff.Get(),nullptr,~0u);context->PSSetShader(nullptr,nullptr,0);
+    for(const auto&[key,view]:store.nativeViews){
+        const auto src=store.sections.find(key);
+        if(src==store.sections.end()||view.sourceRevision!=src->second.nativeRevision||nativeLeaseNow>=view.expires)continue;
+        auto&g=nativeDepth[key];if(!mesh(g,view.depth.vertices,view.depth.revision))continue;
+        for(int k=0;k<3;++k)p.offset[k]=static_cast<float>(view.depth.origin[k]-origin[k]);if(!parameters(p))continue;
+        UINT stride=sizeof(proto::RenVertex),zero=0;auto*vb=g.buffer.Get();context->IASetVertexBuffers(0,1,&vb,&stride,&zero);
+        context->Draw(static_cast<UINT>(view.depth.vertices.size()),0);
+    }
+    for(auto it=nativeDepth.begin();it!=nativeDepth.end();)if(!store.nativeViews.contains(it->first))it=nativeDepth.erase(it);else++it;
+    context->PSSetShader(worldPs.Get(),nullptr,0);
     // All opaque/cutout geometry precedes every translucent triangle, across
     // sections, scene entities and the third-person avatar.
     context->OMSetBlendState(solidBlend.Get(),nullptr,~0u);
     std::vector<BlendedDraw> blended;
-    for(const auto& [key,m]:store.sections)drawSolidMesh(m,sections[key],origin,p,blended);
+    for(const auto& [key,m]:store.sections)drawSolidMesh(store.section_overlay(key,m,nativeLeaseNow),sections[key],origin,p,blended);
     for(auto it=sections.begin();it!=sections.end();)if(!store.sections.contains(it->first))it=sections.erase(it);else++it;
     drawSolidMesh(store.scene,scene,origin,p,blended);
     if(mc.cameraMode!=0){double feet[]={mc.x,mc.y,mc.z};drawSolidMesh(store.avatar,avatar,origin,p,blended,feet);}

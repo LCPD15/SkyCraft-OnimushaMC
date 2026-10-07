@@ -4,6 +4,7 @@
 #include "CollisionBatchTests.hpp"
 #include "CollisionSurfaceTests.hpp"
 #include "FullCubeTests.hpp"
+#include "NativeSectionTests.hpp"
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -108,5 +109,6 @@ int wmain(int argc,wchar_t** argv){
     omc::tests::collision_batch_tests(check);
     omc::tests::collision_surface_tests(check);
     omc::tests::full_cube_tests(check);
+    omc::tests::native_section_tests(check);
     std::printf("%d failure(s)\n",failures);return failures?1:0;
 }

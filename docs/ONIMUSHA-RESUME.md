@@ -5,6 +5,28 @@
 
 ## 最新结果与下一步
 
+### 01:43当前安装：预制方块实例原生绘制，protocol14，等待重启验收
+
+用户要求接管时实际放置方块受鬼武者光照/遮挡，并指出合并模型转换0.45秒的交互延迟。
+已改成**预制16种常用方块资源、复用原生碰撞GameObject**，放置时无文件转换；合并模块保留但不加载。
+详情和支持范围见 [原生方块绘制](ONIMUSHA-NATIVE-BLOCK-RENDERING.md)。
+已更换DLL、Fabric JAR、loader/main/native_blocks和新增第六payload `onimusha_native_instances.lua`。
+`enable_native_section_rendering=true` 实际委托预制实例模块。源 `onimusha_native_sections.lua` 是停用实验，
+不要同时加载它。原生碰撞1280上限保留，导航与全部物体探针保持关闭。
+27个Lua脚本、63项Java测试、3/3原生CTest以及10项转换输入测试通过；77项部署哈希验证。
+65文件存档完整备份 `runtime/test-backups/before-native-sections-20261008-014343`，没有改动背包/世界。
+
+之前游戏PID122276已于01:10关闭，MC PID18704自行保存退出。当前游戏/MC都未运行。
+已询问用户“请启动鬼武者、进入场景、保持F10关闭”，**等待回复**。
+回复后先读新status确认新DLL协议14与场景正常，再运行
+`G:/Onimusha_MC_mod/tools/MC-launch-dev.ps1 -WorldName OnimushaMC-XYZ-v2 -LogPrefix live-native-instances-20261008 -StartHidden -QuitWithHost -SwordBlocking`。
+这个启动器已撤掉自动启动Blender转换器的临时补丁。不需要启动worker。
+MC启动日志应有 `Onimusha prebuilt cube resources: true`，否则检查selected packs，不要强制换掉用户贴图。
+连接ready后再请用户F10、少量连续放置石头/铁块；观察 `native_sections.mode=prebuilt_instances`、
+ready/count、source native receipt及资源加载错误。**尚未进行这版实际游戏测试，不能宣称已完成光照验收。**
+
+以下00:30及更早均为历史；不要按历史PID、protocol13或旧指纹重新部署。
+
 ### 00:30新增结果：原生合并区块模型实景通过
 
 1280完整方块碰撞同步已通过下面四项用户实测，并保存本地提交8d7915b。

@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$ProjectRoot = 'G:\Onimusha_MC_mod',
     [string]$GameRoot = 'F:\SteamLibrary\steamapps\common\OnimushaWotS',
@@ -24,7 +24,7 @@ if ($ProbeOnly) {
 } else {
     $taskEntries += @{Source=(Join-Path $ProjectRoot 'build\native\Release\OnimushaMC.dll'); Relative='reframework\plugins\OnimushaMC.dll'}
     $taskEntries += @{Source=(Join-Path $taskRepo 'onimusha\adapter\onimusha_loader.lua'); Relative='reframework\autorun\onimusha_loader.lua'}
-    foreach ($taskPayload in @('onimusha_mc.lua','onimusha_enemy_hit.lua','onimusha_guard_probe.lua','onimusha_combat_inventory.lua','onimusha_native_blocks.lua')) {
+    foreach ($taskPayload in @('onimusha_mc.lua','onimusha_enemy_hit.lua','onimusha_guard_probe.lua','onimusha_combat_inventory.lua','onimusha_native_blocks.lua','onimusha_native_instances.lua')) {
         $taskEntries += @{Source=(Join-Path $taskRepo ('onimusha\adapter\'+$taskPayload)); Relative=('reframework\data\onimusha_mc\scripts\'+$taskPayload)}
     }
     $taskEntries += @{Source=(Join-Path $taskRepo 'onimusha\config\onimusha_enemy_hit_control.json'); Relative='reframework\data\onimusha_enemy_hit_control.json'}

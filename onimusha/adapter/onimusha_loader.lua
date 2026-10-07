@@ -5,7 +5,7 @@ local ROOT='onimusha_mc/scripts/'
 local CONTROL='onimusha_reload_control.json'
 local OUTPUT='onimusha_reload_status.json'
 local RECEIPT='onimusha_reload_receipt.json'
-local FILES={'onimusha_mc.lua','onimusha_enemy_hit.lua','onimusha_guard_probe.lua','onimusha_combat_inventory.lua','onimusha_native_blocks.lua'}
+local FILES={'onimusha_mc.lua','onimusha_enemy_hit.lua','onimusha_guard_probe.lua','onimusha_combat_inventory.lua','onimusha_native_blocks.lua','onimusha_native_instances.lua'}
 local real_re,real_sdk=re,sdk
 local current,last_good,pending
 local routes,hooks={},{}

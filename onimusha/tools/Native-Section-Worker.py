@@ -1,0 +1,91 @@
+"""Persistent Blender converter for Onimusha live sections. Never calls running-game SDK.
+Host-scoped immutable requests, atomic result publication, bounded resource cache.
+MOD制作：LCPD15/LCPD拉灯
+"""
+import argparse
+import ctypes
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import sys
+import time
+from types import SimpleNamespace
+sys.path.insert(0,str(Path(__file__).parent))
+from native_section_partition import partition
+
+def atomic_json(path, data):
+    tmp=path.with_suffix('.tmp');tmp.write_text(json.dumps(data,ensure_ascii=False),encoding='utf-8');os.replace(tmp,path)
+
+def main():
+    ap=argparse.ArgumentParser()
+    ap.add_argument('--game',type=Path,required=True);ap.add_argument('--out',type=Path,required=True)
+    ap.add_argument('--addon',type=Path,required=True);ap.add_argument('--host-pid',type=int,required=True)
+    a=ap.parse_args(sys.argv[sys.argv.index('--')+1:])
+    assert a.host_pid>0 and (a.game/'OnimushaWotS.exe').exists()
+    k=ctypes.WinDLL('kernel32',use_last_error=True)
+    k.OpenProcess.restype=ctypes.c_void_p;k.OpenProcess.argtypes=[ctypes.c_uint32,ctypes.c_int,ctypes.c_uint32]
+    k.WaitForSingleObject.argtypes=[ctypes.c_void_p,ctypes.c_uint32];k.CloseHandle.argtypes=[ctypes.c_void_p]
+    handle=k.OpenProcess(0x100000,False,a.host_pid);assert handle,'Cannot observe host lifetime'
+    root=a.game/'reframework/data/onimusha_mc/native_sections';root.mkdir(parents=True,exist_ok=True)
+    # One converter per host, held for lifetime. No second worker races result/asset publication.
+    import msvcrt
+    lock=(root/(str(a.host_pid)+'.lock')).open('a+b');lock.seek(0);lock.write(b'1');lock.flush();lock.seek(0)
+    msvcrt.locking(lock.fileno(),msvcrt.LK_NBLCK,1)
+    spec=importlib.util.spec_from_file_location('native_section_builder',Path(__file__).with_name('Build-Native-Section.py'))
+    builder=importlib.util.module_from_spec(spec);spec.loader.exec_module(builder)
+    template=a.game/'natives/stm/mod/onimusha_mc/probe'
+    opts=SimpleNamespace(addon=a.addon,material_template=template/'mc_stone_cube.mdf2.51',
+        tex_template=template/'mc_stone_ALBD.tex.251111100',out=a.out,source_kind='runtime-capture',texel_scale=4)
+    builder.initialize(opts)
+    done=set();started=time.time();built=0
+    while k.WaitForSingleObject(handle,0)==258:
+        atomic_json(root/'worker.json',dict(host_pid=a.host_pid,pid=os.getpid(),state='ready',jobs=len(done),built=built,alive_at=time.time(),started=started))
+        for path in sorted(root.glob(str(a.host_pid)+'_*_*/request.json'),key=lambda p:p.parent.name):
+            if path.parent.name in done:continue
+            job=path.parent;done.add(job.name)
+            result=dict(id=job.name,ok=False)
+            try:
+                assert re.fullmatch(r'\d+_\d+_\d+',job.name) and len(done)<=512
+                req=json.loads(path.read_text(encoding='utf-8'));assert req['id']==job.name and req['host_pid']==a.host_pid
+                raw=(job/'section.bin').read_bytes();atlas=(job/'atlas.bin').read_bytes()
+                result.update(revision=req['revision'],section=req['section'],world=req['world'],epoch=req['epoch'],
+                    mc_pid=req['mc_pid'],generation=req['generation'],source_sha256=hashlib.sha256(raw).hexdigest())
+                begin=time.perf_counter()
+                section,compact,mask,skipped=partition(raw,atlas,req['animated'])
+                result.update(mask=mask,skipped=skipped)
+                if section is None:result.update(ok=True,empty=True)
+                else:
+                    opts.section=job/'compact-section.bin';opts.atlas=job/'compact-atlas.bin'
+                    opts.section.write_bytes(section);opts.atlas.write_bytes(compact)
+                    # Bound accumulated immutable resources; no overwrite of potentially cached assets.
+                    cache_bytes=sum(p.stat().st_size for p in a.out.glob('section_*/*') if p.is_file()) if a.out.exists() else 0
+                    assert cache_bytes<1024**3,'Native section resource cache reached 1 GiB; overlay retained'
+                    report=builder.build(opts);stem=Path(report['mesh_path']).stem
+                    assert re.fullmatch('section_[a-f0-9]{20}',stem)
+                    dst=a.game/'natives/stm/mod/onimusha_mc/sections'/stem;dst.mkdir(parents=True,exist_ok=True)
+                    for name,sha in report['files'].items():
+                        src=a.out/stem/name;data=src.read_bytes();assert hashlib.sha256(data).hexdigest()==sha
+                        target=dst/name
+                        if target.exists():assert hashlib.sha256(target.read_bytes()).hexdigest()==sha
+                        else:
+                            temp=target.with_suffix(target.suffix+'.tmp');temp.write_bytes(data);os.replace(temp,target)
+                    result.update(ok=True,asset_id=stem,triangles=report['triangles'],files=report['files']);built+=1
+                result['seconds']=round(time.perf_counter()-begin,3)
+            except Exception as e:
+                result['error']=str(e);print('Native section failed: '+str(e),flush=True)
+            # Result is the readiness fence, after every asset is completely written.
+            atomic_json(job/'result.json',result)
+            # Keep metadata/compact inputs for diagnosis, not a 20+ MiB atlas per edit.
+            for name in ('section.bin','atlas.bin'):
+                p=job/name
+                if p.is_file():p.unlink()
+            print(json.dumps(result,ensure_ascii=False),flush=True)
+        time.sleep(.25)
+    atomic_json(root/'worker.json',dict(host_pid=a.host_pid,pid=os.getpid(),state='host_exited',jobs=len(done),built=built))
+    k.CloseHandle(handle)
+
+if __name__=='__main__':main()

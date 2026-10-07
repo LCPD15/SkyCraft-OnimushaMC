@@ -174,6 +174,15 @@ int main(){
         Mesh mesh;mesh.revision=1;mesh.vertices={{-0.6f,-0.6f,0.5f,0,0,0xFFFFFFFFu,0x0f00,0},{0.6f,-0.6f,0.5f,0,0,0xFFFFFFFFu,0x0f00,0},{0,0.6f,0.5f,0,0,0xFFFFFFFFu,0x0f00,0}};store.sections[{0,0,0}]=mesh;
         OverlayFrame hud;hud.width=hud.height=2;hud.frameId=1;hud.rgba={0,0,0,0,0,255,0,255,0,0,0,0,0,0,0,0};proto::McState mc{};mc.flags=proto::kMcInWorld;mc.fovDeg=70;CameraState camera{};camera.valid=true;camera.viewProj[0]=camera.viewProj[5]=camera.viewProj[10]=camera.viewProj[15]=1;
         gpu.clear();renderer::initialize(&p);check(!renderer::ready(),"renderer fails closed before resource preflight");check(renderer::prepare()&&renderer::ready(),"GPU preflight succeeds without drawing");unsigned w{},h{};auto image=gpu.readback(w,h);const auto* untouched=image.data()+(std::size_t(h*5/8)*w+w/2)*4;check(untouched[0]==0&&untouched[1]==0&&untouched[2]==0,"resource preflight preserves original backbuffer");renderer::render(store,hud,mc,camera);image=gpu.readback(w,h);inspect(image,w,h,"initial");
+        store.revision=10;store.sections[{0,0,0}].nativeRevision=1;
+        check(store.accept_native_section({0,0,0},1,std::vector<std::uint8_t>{1},GetTickCount64()),"native draw readiness receipt accepted");
+        gpu.clear();renderer::render(store,hud,mc,camera);image=gpu.readback(w,h);
+        auto* nativeHidden=image.data()+(std::size_t(h*5/8)*w+w/2)*4;
+        check(nativeHidden[0]<10&&nativeHidden[1]<10&&nativeHidden[2]<10,"native-owned triangle is absent from overlay color buffer");
+        store.scene=mesh;store.scene.revision=20;for(auto&v:store.scene.vertices){v.z=.7f;v.color=0xff00ff00;}
+        gpu.clear();renderer::render(store,hud,mc,camera);image=gpu.readback(w,h);nativeHidden=image.data()+(std::size_t(h*5/8)*w+w/2)*4;
+        check(nativeHidden[1]<10,"native-owned geometry still depth-occludes overlay MC entities");
+        store.scene={};store.invalidate_native_views();gpu.clear();renderer::render(store,hud,mc,camera);image=gpu.readback(w,h);inspect(image,w,h,"native receipt released");
         proto::ColTri blocker{};for(int i=0;i<3;i++){blocker.v[i*3]=mesh.vertices[i].x;blocker.v[i*3+1]=mesh.vertices[i].y;blocker.v[i*3+2]=0.25f;}store.collisionTriangles={blocker};store.collisionRevision=1;
         gpu.clear();renderer::render(store,hud,mc,camera);image=gpu.readback(w,h);const auto* occluded=image.data()+(std::size_t(h*5/8)*w+w/2)*4;check(occluded[0]<10&&occluded[1]<10&&occluded[2]<10,"original-world collider depth occludes MC mesh");
         store.collisionTriangles.clear();store.collisionRevision=2;store.sections.clear();store.avatar=mesh;store.avatar.batches={{1,0,3,0}};store.textures[1]={2,2,{0,0,255,255,0,0,255,255,0,0,255,255,0,0,255,255},1};mc.cameraMode=1;

@@ -79,6 +79,7 @@ public final class WorldExporter {
 	private static int sentHostEpoch = Integer.MIN_VALUE;
 	private static int sentWorldId = Integer.MIN_VALUE;
 	private static int meshesSent;
+	private static boolean nativeVanillaCubes;
 	private static ClientLevel sentLevel;
 	private static SkyAtlas atlas;
 	private static ModelBlockRenderer blockRenderer;
@@ -138,6 +139,11 @@ public final class WorldExporter {
 		AvatarExporter.reset();
 		ICONS.clear();
 		CUBE_FACES.clear();
+		// Prebuilt resources use this installation's vanilla textures. Custom user packs
+		// must keep their own exported geometry/atlas instead of silently losing their skin.
+		nativeVanillaCubes = minecraft.getResourcePackRepository().getSelectedIds().stream()
+			.allMatch(id -> id.equals("vanilla") || id.equals("fabric"));
+		SkyCraft.LOG.info("Onimusha prebuilt cube resources: {} (selected packs {})", nativeVanillaCubes, minecraft.getResourcePackRepository().getSelectedIds());
 		boolean ao = minecraft.options.ambientOcclusion().get();
 		blockRenderer = new ModelBlockRenderer(ao, true, minecraft.getBlockColors());
 		fluidRenderer = new FluidRenderer(minecraft.getModelManager().getFluidStateModelSet());
@@ -259,7 +265,9 @@ public final class WorldExporter {
 						}
 						if (state.getRenderShape() == RenderShape.MODEL) {
 							var model = Minecraft.getInstance().getModelManager().getBlockStateModelSet().get(state);
+							MESH.nativeKind = nativeVanillaCubes ? NativeBlockKinds.of(state) : 0;
 							blockRenderer.tesselateBlock(MESH, x, y, z, level, pos.immutable(), state, model, state.getSeed(pos));
+							MESH.nativeKind = 0;
 						}
 					}
 				}
@@ -500,6 +508,7 @@ public final class WorldExporter {
 	private static final class MeshBuilder implements net.minecraft.client.renderer.block.BlockQuadOutput, FluidRenderer.Output, VertexConsumer {
 		private ByteBuffer buf = ByteBuffer.allocateDirect(1 << 20).order(ByteOrder.LITTLE_ENDIAN);
 		private int vertices;
+		private int nativeKind;
 		// fluid quad assembly
 		private final float[] fq = new float[4 * 8];
 		private int fqCount;
@@ -508,6 +517,7 @@ public final class WorldExporter {
 		void reset() {
 			this.buf.clear();
 			this.vertices = 0;
+			this.nativeKind = 0;
 			this.fqCount = 0;
 		}
 
@@ -537,7 +547,7 @@ public final class WorldExporter {
 			int block = (light >> 4) & 0xF;
 			int sky = (light >> 20) & 0xF;
 			this.buf.putInt(block | (sky << 8));
-			this.buf.putInt(flags);
+			this.buf.putInt(flags | (nativeKind << 8));
 			this.vertices++;
 		}
 
