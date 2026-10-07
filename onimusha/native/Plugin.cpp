@@ -13,6 +13,8 @@ extern "C" {
 #include <cmath>
 #include <cstring>
 #include <mutex>
+#include <future>
+#include <chrono>
 
 namespace omc {
 namespace {
@@ -35,6 +37,33 @@ bool pendingRelease=false;
 std::uint16_t surrogate{};
 using RegionKey=std::array<std::int32_t,6>;
 std::map<RegionKey,std::vector<proto::ColTri>> collisionRegions;
+struct PackedTerrain {
+    proto::ColRegion region{};
+    std::vector<proto::ColTri> triangles;
+    std::vector<CollisionPacket> packets;
+    std::string error;
+    double ms{};
+    bool ok{};
+};
+std::future<PackedTerrain> terrainWorker;
+std::uint64_t terrainTicket{},terrainGeneration{},terrainBaseSeq{},terrainPublishedSeq{};
+std::uint32_t terrainPid{},terrainEpoch{};
+std::string terrainState="idle",terrainError;
+void cache_collision(const proto::ColRegion&,std::vector<proto::ColTri>);
+void poll_terrain_worker(){
+    if(!terrainWorker.valid()||terrainWorker.wait_for(std::chrono::seconds(0))!=std::future_status::ready)return;
+    auto result=terrainWorker.get();const auto current=bridge.collision_status();
+    bridge.collisionPackMs=result.ms;bridge.collisionPackMaxMs=std::max(bridge.collisionPackMaxMs,result.ms);
+    if(current.generation!=terrainGeneration||current.mcPid!=terrainPid||host.collisionEpoch!=terrainEpoch
+        ||current.publishSeq!=terrainBaseSeq||!current.connected||!current.ringValid){
+        terrainState="discarded";terrainError="Terrain context changed while packing";return;
+    }
+    if(!result.ok){++bridge.rejected;++bridge.collisionPackFailures;terrainState="failed";
+        terrainError=bridge.collisionFailure=bridge.error=result.error;return;}
+    if(!bridge.publish_packed_collision(terrainEpoch,std::move(result.packets))){terrainState="failed";terrainError=bridge.collisionFailure;return;}
+    cache_collision(result.region,std::move(result.triangles));
+    terrainPublishedSeq=bridge.collision_status().publishSeq;terrainState="published";terrainError.clear();
+}
 
 double number(lua_State* L,int table,const char* key,double fallback=0){lua_getfield(L,table,key);int valid{};const auto n=lua_tonumberx(L,-1,&valid);lua_pop(L,1);return valid&&std::isfinite(n)?n:fallback;}
 bool valid_number(lua_State* L,int table,const char* key,double& value){lua_getfield(L,table,key);int valid{};value=lua_tonumberx(L,-1,&valid);lua_pop(L,1);return valid&&std::isfinite(value);}
@@ -114,7 +143,9 @@ int send_hurt(lua_State* L){
     lua_pushboolean(L,ok);return 1;
 }
 int status(lua_State* L){
-    std::scoped_lock lock(mutex);const auto state=bridge.collision_status();const auto* reason=not_ready_reason(&state);const auto now=GetTickCount64();lua_createtable(L,0,48);
+    std::scoped_lock lock(mutex);poll_terrain_worker();const auto state=bridge.collision_status();const auto* reason=not_ready_reason(&state);const auto now=GetTickCount64();lua_createtable(L,0,48);
+    bfield(L,"collision_async_supported",true);ifield(L,"collision_job_id",terrainTicket);sfield(L,"collision_job_state",terrainState.c_str());
+    sfield(L,"collision_job_error",terrainError.c_str());ifield(L,"collision_job_publish_seq",terrainPublishedSeq);
     bfield(L,"connected",state.connected);bfield(L,"enabled",enabled);bfield(L,"ready",reason==nullptr);sfield(L,"not_ready_reason",reason?reason:"ready");
     bfield(L,"host_ready",ready);bfield(L,"collision_ready",collisionReady);bfield(L,"camera_ready",cameraReady);bfield(L,"renderer_ready",renderer::ready());
     nfield(L,"host_age_ms",submittedMs&&submittedMs<=now?double(now-submittedMs):-1);nfield(L,"mc_heartbeat_age_ms",state.heartbeatAgeMs);bfield(L,"re_ui_open",reUiOpen);bfield(L,"re_ui_sampled",reUiSampled);
@@ -134,16 +165,34 @@ int publish_tris(lua_State* L){
     lua_getfield(L,1,"triangles");if(!lua_istable(L,-1)||lua_rawlen(L,-1)>100000||epoch!=host.collisionEpoch||region.minX>region.maxX||region.minY>region.maxY||region.minZ>region.maxZ){lua_pop(L,1);lua_pushboolean(L,false);return 1;}
     const int table=lua_gettop(L);const auto count=lua_rawlen(L,table);std::vector<proto::ColTri> tris;tris.reserve(count);const char* names[]={"ax","ay","az","bx","by","bz","cx","cy","cz"};
     for(std::size_t i=1;i<=count;i++){lua_rawgeti(L,table,lua_Integer(i));if(lua_istable(L,-1)){proto::ColTri t{};for(int j=0;j<9;j++)t.v[j]=float(number(L,lua_gettop(L),names[j]));t.flags=std::uint32_t(number(L,lua_gettop(L),"flags"))&~proto::kTriDiggable;tris.push_back(t);}lua_pop(L,1);}lua_pop(L,1);
+    if(boolean(L,1,"async")){
+        poll_terrain_worker();const auto current=bridge.collision_status();
+        if(tris.empty()||terrainWorker.valid()||!current.connected||!current.ringValid){lua_pushboolean(L,false);return 1;}
+        region.epoch=epoch;
+        try{
+            terrainWorker=std::async(std::launch::async,[region,rows=std::move(tris)]() mutable {
+                PackedTerrain r;r.region=region;r.triangles=std::move(rows);const auto start=std::chrono::steady_clock::now();
+                // Numeric owned copies only. No SDK calls, Lua, shared memory, or rendering on this thread.
+                try{r.ok=pack_collision(region,r.triangles,r.packets,r.error);}catch(const std::exception& e){r.error=e.what();}
+                r.ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();return r;
+            });
+        }catch(const std::exception& e){bridge.error=e.what();lua_pushboolean(L,false);return 1;}
+        ++terrainTicket;terrainGeneration=current.generation;terrainPid=current.mcPid;terrainEpoch=epoch;
+        terrainBaseSeq=current.publishSeq;terrainPublishedSeq=0;terrainState="packing";terrainError.clear();
+        lua_pushinteger(L,lua_Integer(terrainTicket));return 1;
+    }
     const bool ok=!tris.empty()&&bridge.publish_collision(epoch,region,tris);
     sync_collision_generation(bridge.collision_status());
-    if(ok){
+    if(ok)cache_collision(region,std::move(tris));
+    lua_pushboolean(L,ok);return 1;
+}
+void cache_collision(const proto::ColRegion& region,std::vector<proto::ColTri> tris){
         const RegionKey key{region.minX,region.minY,region.minZ,region.maxX,region.maxY,region.maxZ};collisionRegions[key]=std::move(tris);
         auto distance=[](const RegionKey& k){const double x=(double(k[0])+k[3])*0.5-host.posX,y=(double(k[1])+k[4])*0.5-host.posY,z=(double(k[2])+k[5])*0.5-host.posZ;return x*x+y*y+z*z;};
         for(auto it=collisionRegions.begin();it!=collisionRegions.end();){if(it->first!=key&&distance(it->first)>96*96)it=collisionRegions.erase(it);else ++it;}
         auto total=[](){std::size_t n=0;for(const auto& [k,v]:collisionRegions)n+=v.size();return n;};
         while(collisionRegions.size()>32||total()>250000){auto farRegion=collisionRegions.end();double maxDistance=-1;for(auto it=collisionRegions.begin();it!=collisionRegions.end();++it)if(it->first!=key&&distance(it->first)>maxDistance){maxDistance=distance(it->first);farRegion=it;}if(farRegion==collisionRegions.end())break;collisionRegions.erase(farRegion);}
         store.collisionTriangles.clear();store.collisionTriangles.reserve(total());for(const auto& [k,v]:collisionRegions)store.collisionTriangles.insert(store.collisionTriangles.end(),v.begin(),v.end());++store.collisionRevision;collisionReady=true;
-    }lua_pushboolean(L,ok);return 1;
 }
 int drain_solids(lua_State* L){std::scoped_lock lock(mutex);const auto count=std::min(store.solidChanges.size(),std::size_t(8192));lua_createtable(L,int(count),0);for(std::size_t i=0;i<count;i++){const auto& s=store.solidChanges[i];lua_createtable(L,0,4);nfield(L,"x",s.x);nfield(L,"y",s.y);nfield(L,"z",s.z);bfield(L,"solid",s.solid);lua_rawseti(L,-2,lua_Integer(i+1));}store.solidChanges.erase(store.solidChanges.begin(),store.solidChanges.begin()+count);return 1;}
 int set_camera(lua_State* L){

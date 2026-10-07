@@ -62,7 +62,7 @@ local function setup(count)
 end
 """+finite+positions+failures+collision+r"""
 local function finish_export()
- for _=1,5 do state.frame=state.frame+1;advance_collision(bridge,native);if not state.collision then return end end
+ for _=1,5 do state.frame=state.frame+1;advance_collision(bridge,native);if not state.collision or state.collision.packing_ticket then return end end
  error('Export did not finish')
 end
 local function acknowledge()
@@ -75,7 +75,7 @@ local function seed_coverage()
 end
 return function()
  setup();assert(start_collision({}, {x=0,y=65,z=0},native));assert(not state.collision_ready)
- close(query.area.minpos.y,49);close(query.area.maxpos.y,81)
+ close(query.area.minpos.y,48-0.002);close(query.area.maxpos.y,88+0.002)
  advance_collision(bridge,native);assert(state.collision and #state.collision.triangles==1 and publishes==0)
  state.frame=state.frame+1;advance_collision(bridge,native)
  assert(publishes==1 and state.collision_pending and not state.collision_ready and not state.collision_coverage)
@@ -89,8 +89,8 @@ return function()
  local foot={x=8192,y=65,z=-24576}
  assert(collision_coverage_gate(native,foot,foot))
  finish_export();assert(state.collision_pending and state.collision_coverage==old and state.collision_ready)
- close(old.bounds.min_x,8192-7);close(old.bounds.max_x,8192+16)
- assert(not collision_coverage_gate(native,{x=8192-8,y=65,z=-24576},foot))
+ close(old.bounds.min_x,8192-16);close(old.bounds.max_x,8192+16)
+ assert(collision_coverage_gate(native,{x=8192-8,y=65,z=-24576},foot))
  assert(collision_coverage_gate(native,foot,foot))
  reconcile_collision(native);assert(state.collision_coverage==old)
  acknowledge();assert(state.collision_coverage~=old and state.collision_coverage.centre.x==9)
@@ -101,17 +101,50 @@ return function()
  assert(collision_contains_foot(b,{x=8192+15,y=65,z=-24576}))
  assert(not collision_contains_foot(b,{x=8192+15.001,y=65,z=-24576}))
  assert(not collision_contains_foot(b,{x=8192,y=65,z=-24576-15.001}))
- assert(collision_contains_foot(b,{x=8192,y=61,z=-24576}))
- assert(not collision_contains_foot(b,{x=8192,y=60.999,z=-24576}))
- assert(collision_contains_foot(b,{x=8192,y=79,z=-24576}))
- assert(not collision_contains_foot(b,{x=8192,y=79.001,z=-24576}))
+ assert(collision_contains_foot(b,{x=8192,y=60,z=-24576}))
+ assert(not collision_contains_foot(b,{x=8192,y=59.999,z=-24576}))
+ assert(collision_contains_foot(b,{x=8192,y=86,z=-24576}))
+ assert(not collision_contains_foot(b,{x=8192,y=86.001,z=-24576}))
  local outside={x=8192+16,y=65,z=-24576}
  assert(not collision_coverage_gate(native,foot,outside));assert(not collision_coverage_gate(native,outside,foot))
  assert(not collision_refresh_due({x=8,y=65,z=0}));assert(collision_refresh_due({x=8.001,y=65,z=0}))
  assert(not collision_refresh_due({x=0,y=63,z=0}));assert(collision_refresh_due({x=0,y=62.999,z=0}))
  assert(collision_refresh_due({x=0,y=67.001,z=0}))
  assert(not collision_contains_foot(b,{x=0/0,y=65,z=0}))
- print('PASS actual query bounds gate both feet/body/support and vertical refresh starts before the 12-cell support edge')
+ assert(published.min_x%8==0 and (published.max_x+1)%8==0)
+ assert(published.min_y==48 and published.max_y==87)
+ print('PASS whole-cell query bounds gate both feet/body/support and vertical refresh starts before the 12-cell support edge')
+
+ -- The worker ticket is not a publication or an acknowledgement. Readiness stays
+ -- on the previous complete cells while an owned numeric copy packs off-thread.
+ setup();old=seed_coverage();native.collision_async_supported=true
+ bridge.publish_collision_tris=function(region)
+  assert(region.async and region.min_x%8==0 and (region.max_x+1)%8==0)
+  published=region;native.collision_job_id=31;native.collision_job_state='packing';return 31
+ end
+ assert(start_collision({}, {x=9,y=65,z=0},native));finish_export()
+ assert(state.collision and state.collision.packing_ticket==31 and state.collision.triangles==nil)
+ assert(state.collision_coverage==old and not state.collision_pending)
+ assert(collision_diagnostic().exporting.packing_ticket==31)
+ advance_collision(bridge,native);assert(not state.collision_pending)
+ native.collision_job_state='published';native.collision_publish_seq=native.collision_publish_seq+1
+ native.collision_job_publish_seq=native.collision_publish_seq
+ advance_collision(bridge,native);assert(state.collision_pending and state.collision_coverage==old)
+ acknowledge();assert(state.collision_coverage~=old)
+ print('PASS background submission preserves old coverage until publication AND final consumer acknowledgement')
+ for _,mode in ipairs({'failed','discarded','superseded','timeout'}) do
+  setup();old=seed_coverage();native.collision_async_supported=true
+  bridge.publish_collision_tris=function(region)
+   native.collision_job_id=32;native.collision_job_state='packing';return 32
+  end
+  assert(start_collision({}, {x=9,y=65,z=0},native));finish_export()
+  if mode=='superseded' then native.collision_job_id=33
+  elseif mode=='timeout' then state.frame=state.collision.packing_frame+601
+  else native.collision_job_state=mode;native.collision_job_error='test rejection' end
+  advance_collision(bridge,native)
+  assert(not state.collision and not state.collision_pending and state.collision_coverage==old)
+ end
+ print('PASS rejected, stale and timed-out worker jobs never replace certified terrain')
  setup();cfg.units_per_block=0.25;seed_coverage()
  local scaled_foot=mcpos({x=0,y=65,z=0})
  local allowed,reason=collision_coverage_gate(native,scaled_foot,scaled_foot)
@@ -166,7 +199,7 @@ return function()
  setup();old=seed_coverage();assert(start_collision({}, {x=9,y=65,z=0},native));finish_export()
  state.frame=state.collision_pending.queued_frame+301;reconcile_collision(native)
  assert(state.collision_coverage==old and not state.collision_pending and contains(state.collision_failure.reason,'timed out'))
- close(old.bounds.min_x,8192-7)
+ close(old.bounds.min_x,8192-16)
  setup();seed_coverage();assert(start_collision({}, {x=9,y=65,z=0},native));finish_export()
  native.collision_publish_seq=native.collision_publish_seq+1;reconcile_collision(native)
  assert(not state.collision_coverage and not state.collision_ready and contains(state.collision_failure.reason,'superseded'))
@@ -192,4 +225,4 @@ return function()
 end
 """)
 run()
-print("COLLISION_HANDOFF_REGRESSION_OK 10 actual-production Lua cases; LUA54_COMPLETE_SYNTAX_OK")
+print("COLLISION_HANDOFF_REGRESSION_OK 12 actual-production Lua cases; LUA54_COMPLETE_SYNTAX_OK")

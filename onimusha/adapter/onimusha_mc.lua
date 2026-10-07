@@ -1046,10 +1046,13 @@ local function start_collision(s,p,native)
     job.shapes={};job.triangles={};job.centre={x=p.x,y=p.y,z=p.z}
     job.shape_index=1;job.triangle_index=0;job.unsupported=0;job.started_frame=state.frame
     local mapped=mcpos(p);local r=job.radius
-    job.bounds={min_x=mapped.x-r,min_y=mapped.y-r,min_z=mapped.z-r,
-        max_x=mapped.x+r,max_y=mapped.y+r,max_z=mapped.z+r}
-    job.query_aabb={min_x=p.x-r*job.units,min_y=p.y-r*job.units,min_z=p.z-r*job.units,
-        max_x=p.x+r*job.units,max_y=p.y+r*job.units,max_z=p.z+r*job.units}
+    -- COL_REGION replaces an entire 8-block cell. Query every replaced cell,
+    -- including edge cells, so unqueried padding cannot erase cached ground.
+    job.bounds={min_x=math.floor((mapped.x-r)/8)*8,min_y=math.floor((mapped.y-r)/8)*8,min_z=math.floor((mapped.z-r)/8)*8,
+        max_x=math.ceil((mapped.x+r)/8)*8,max_y=math.ceil((mapped.y+r)/8)*8,max_z=math.ceil((mapped.z+r)/8)*8}
+    local b=job.bounds;local halo=0.002
+    job.query_aabb={min_x=(b.min_x-job.tile_x-halo)*job.units,min_y=(b.min_y-halo)*job.units,min_z=(b.min_z-job.tile_z-halo)*job.units,
+        max_x=(b.max_x-job.tile_x+halo)*job.units,max_y=(b.max_y+halo)*job.units,max_z=(b.max_z-job.tile_z+halo)*job.units}
     job.max_triangles=cfg.collision_max_triangles
     collision_counters().starts=collision_counters().starts+1
     local query_ok,query_error=pcall(function()
@@ -1093,10 +1096,36 @@ local function start_collision(s,p,native)
     state.collision=job
     return true
 end
+local function accept_collision_publication(job,after,before)
+    if not collision_same_context(job,after) or type(after.collision_publish_seq)~="number"
+        or after.collision_publish_seq==before or after.collision_publish_seq<=0 then
+        invalidate_collision_coverage("Terrain publication context/sequence invalid");collision_failure("Terrain publication context/sequence invalid");return
+    end
+    job.publish_seq=after.collision_publish_seq;job.queued_frame=state.frame
+    job.shapes=nil;job.triangles=nil
+    -- All replacement cells were completely queried. Old certified cells remain
+    -- valid while the consumer drains the batch; no intersection shrink is needed.
+    state.collision_pending=job;state.collision=nil
+    collision_counters().queued=collision_counters().queued+1
+    reconcile_collision(after)
+end
 local function advance_collision(bridge,native)
     local job=state.collision
     if not job then return end
     if not collision_same_context(job,native) then invalidate_collision_coverage("Terrain export context changed");return end
+    if job.packing_ticket then
+        local after=bridge.status()
+        if after.collision_job_id~=job.packing_ticket then collision_failure("Terrain packing ticket superseded");return end
+        if after.collision_job_state=="packing" then
+            if state.frame-job.packing_frame>600 then collision_failure("Background terrain packing timed out") end
+            return
+        end
+        if after.collision_job_state~="published" then
+            collision_failure("Background terrain packing failed: "..tostring(after.collision_job_error));return
+        end
+        if after.collision_job_publish_seq~=after.collision_publish_seq then collision_failure("Background terrain publication superseded");return end
+        accept_collision_publication(job,after,job.before_publish_seq);return
+    end
     local budget=cfg.collision_triangles_per_frame
     while budget>0 and job.shape_index<=#job.shapes do
         local item=job.shapes[job.shape_index]
@@ -1134,35 +1163,25 @@ local function advance_collision(bridge,native)
     end
     local bounds=job.bounds
     local region={epoch=job.epoch,min_x=math.floor(bounds.min_x),min_y=math.floor(bounds.min_y),min_z=math.floor(bounds.min_z),
-        max_x=math.ceil(bounds.max_x),max_y=math.ceil(bounds.max_y),max_z=math.ceil(bounds.max_z),triangles=job.triangles}
+        max_x=bounds.max_x-1,max_y=bounds.max_y-1,max_z=bounds.max_z-1,triangles=job.triangles,
+        async=native.collision_async_supported==true}
     local before=native.collision_publish_seq
     local ok,accepted=pcall(bridge.publish_collision_tris,region)
+    if region.async then
+        if not ok or type(accepted)~="number" or accepted<=0 then collision_failure("Background terrain submission rejected");return end
+        job.packing_ticket=accepted;job.packing_frame=state.frame;job.before_publish_seq=before
+        job.count=#job.triangles;job.shapes=nil;job.triangles=nil;return
+    end
     if not ok or accepted~=true then collision_failure("Complete terrain batch publication rejected");return end
     local after=bridge.status()
-    if not collision_same_context(job,after) or type(after.collision_publish_seq)~="number"
-        or after.collision_publish_seq==before or after.collision_publish_seq<=0 then
-        invalidate_collision_coverage("Terrain publication context/sequence invalid");collision_failure("Terrain publication context/sequence invalid");return
-    end
-    job.publish_seq=after.collision_publish_seq;job.queued_frame=state.frame;job.count=#job.triangles
-    job.shapes=nil;job.triangles=nil
-    local old=state.collision_coverage
-    if old then
-        -- Java applies packed regions while draining the batch. Their 8-cell padding
-        -- can replace voxels outside the new actual query before its final ack.
-        -- Only the intersection stays certified during this handoff (also on timeout).
-        local a,b=old.bounds,job.bounds
-        old.bounds={min_x=math.max(a.min_x,b.min_x),min_y=math.max(a.min_y,b.min_y),min_z=math.max(a.min_z,b.min_z),
-            max_x=math.min(a.max_x,b.max_x),max_y=math.min(a.max_y,b.max_y),max_z=math.min(a.max_z,b.max_z)}
-    end
-    state.collision_pending=job;state.collision=nil
-    collision_counters().queued=collision_counters().queued+1
-    reconcile_collision(after)
+    job.count=#job.triangles;accept_collision_publication(job,after,before)
 end
 local function collision_diagnostic()
     local job=state.collision
     return {counters=state.collision_stats,coverage=state.collision_coverage,pending=state.collision_pending,
         exporting=job and {epoch=job.epoch,world=job.world,mc_pid=job.mc_pid,generation=job.generation,
-            started_frame=job.started_frame,triangles=#job.triangles,shape_index=job.shape_index,
+            started_frame=job.started_frame,triangles=job.triangles and #job.triangles or job.count,shape_index=job.shape_index,
+            packing_ticket=job.packing_ticket,packing_frame=job.packing_frame,
             triangle_index=job.triangle_index,bounds=job.bounds,query_aabb=job.query_aabb},
         last_failure=state.collision_failure,retry_frame=state.collision_retry_frame,
         invalidation=state.collision_invalidation}

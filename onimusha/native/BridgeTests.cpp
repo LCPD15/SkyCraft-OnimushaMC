@@ -2,6 +2,7 @@
 #include "CollisionPacking.hpp"
 #include "InputRouting.hpp"
 #include "CollisionBatchTests.hpp"
+#include "CollisionSurfaceTests.hpp"
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -104,5 +105,6 @@ int wmain(int argc,wchar_t** argv){
     proto::RenSolids solid{0,0,0,1};std::uint8_t bits[512]{};bits[0]=1;auto bp=payload(solid,std::span<const std::uint8_t>(bits));check(store.consume(proto::kRenSolids,bp)&&store.solidChanges.size()==1&&store.solidChanges[0].solid,"solid block collider change");solid.count=0;auto rp=payload(solid,std::span<const std::uint8_t>());check(store.consume(proto::kRenSolids,rp)&&!store.solidChanges.back().solid,"collider removed with block");
     auto* rr=base+proto::kOffRenderRing;*reinterpret_cast<proto::ColMsgHeader*>(rr+proto::kRenRingDataOff)={proto::kRenAtlas,0xFFFFFFFFu};*reinterpret_cast<std::uint64_t*>(rr)=8;link.drain_render(store);check(link.rejected>0&&*reinterpret_cast<std::uint64_t*>(rr+proto::kRenRingTailOff)==8,"malformed ring skipped within bounds");
     omc::tests::collision_batch_tests(check);
+    omc::tests::collision_surface_tests(check);
     std::printf("%d failure(s)\n",failures);return failures?1:0;
 }

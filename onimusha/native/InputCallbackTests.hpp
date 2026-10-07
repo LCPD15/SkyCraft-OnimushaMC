@@ -154,6 +154,37 @@ inline bool input_callback_tests(lua_State* L,REFrameworkRendererData& render,RE
         std::puts("PASS: full ring and final-slot button-up failure retry ReleaseAll before GUI center baseline");
         std::puts("PASS: pending ReleaseAll precedes next-message GUI/button without Present; one-slot recovery, system shortcuts and RAW cleanup remain correct");
         std::puts("PASS: actual DLL diagnostic reasons preserve gate order; invalid collision tail revokes readiness until a fresh complete batch");
+        const auto run=[&](const char* script){if(luaL_dostring(L,script)!=LUA_OK)throw std::runtime_error(lua_tostring(L,-1));};
+        run(R"(
+            async_region={async=true,epoch=9,min_x=0,min_y=0,min_z=0,max_x=7,max_y=7,max_z=7,triangles={}}
+            for i=1,64 do async_region.triangles[i]={ax=0,ay=0,az=0,bx=8,by=8,bz=0,cx=0,cy=8,cz=8} end
+            async_before=onimusha_mc.status();assert(async_before.collision_async_supported)
+            async_ticket=onimusha_mc.publish_collision_tris(async_region);assert(type(async_ticket)=='number')
+        )");
+        // Poll until completion; heartbeat/host submissions remain independent of packing.
+        const auto await_worker=[&](){for(int i=0;i<2000;i++){
+            peer.publish(false);run("async_status=onimusha_mc.status();assert(async_status.connected)");
+            lua_getglobal(L,"async_status");lua_getfield(L,-1,"collision_job_state");const bool pending=std::strcmp(lua_tostring(L,-1),"packing")==0;lua_pop(L,2);
+            if(!pending)return;Sleep(2);
+        }throw std::runtime_error("background terrain worker timed out in API test");};
+        await_worker();run(R"(
+            assert(async_status.collision_job_state=='published' and async_status.collision_job_id==async_ticket)
+            assert(async_status.collision_publish_seq==async_before.collision_publish_seq+1 and async_status.collision_ready)
+            assert(async_status.collision_job_publish_seq==async_status.collision_publish_seq)
+            async_before=async_status;async_region.max_x=500
+            async_ticket=onimusha_mc.publish_collision_tris(async_region);assert(type(async_ticket)=='number')
+        )");
+        await_worker();run(R"(
+            assert(async_status.collision_job_state=='failed' and async_status.collision_publish_seq==async_before.collision_publish_seq)
+            assert(async_status.collision_head==async_before.collision_head and async_status.collision_ready)
+            async_region.max_x=7;async_ticket=onimusha_mc.publish_collision_tris(async_region)
+            assert(onimusha_mc.submit_host({ready=false,x=0,y=0,z=0,epoch=10,health_current=75,health_max=100}))
+        )");
+        await_worker();run(R"(
+            assert(async_status.collision_job_state=='discarded' and async_status.collision_publish_seq==async_before.collision_publish_seq)
+            assert(async_status.collision_head==async_before.collision_head and not async_status.collision_ready)
+        )");
+        std::puts("PASS: actual DLL async numeric-only packing commits once; rejected work retains old coverage; epoch change discards late worker results");
         std::puts("NOTE: genuine relative HRAWINPUT packets require physical mouse acceptance; pure router tests cover RAW accumulation and deduplication");return true;
     }catch(const std::exception& e){std::fprintf(stderr,"Input callback test: %s\n",e.what());reset();return false;}
 }

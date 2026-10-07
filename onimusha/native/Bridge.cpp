@@ -118,6 +118,11 @@ bool Bridge::publish_collision(std::uint32_t epoch,const proto::ColRegion& regio
     try{packed=pack_collision(h,triangles,packets,packingError);}catch(const std::bad_alloc&){packingError="Collision packing allocation failed";}
     collisionPackMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();collisionPackMaxMs=std::max(collisionPackMaxMs,collisionPackMs);
     if(!packed)return fail(std::move(packingError),true);
+    return publish_packed_collision(epoch,std::move(packets));
+}
+bool Bridge::publish_packed_collision(std::uint32_t epoch,std::vector<CollisionPacket> packets){
+    const auto fail=[&](std::string reason,bool){++rejected;++collisionQueueFailures;collisionFailure=error=std::move(reason);return false;};
+    if(!base_)return fail("Collision mapping unavailable",false);
     // Nothing, including COL_CLEAR, becomes visible until the entire batch fits.
     // Recheck the observed link after synchronous packing before choosing CLEAR.
     (void)collision_status();

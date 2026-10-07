@@ -108,9 +108,11 @@ return function()
  local job=assert(collision_context(native));state.collision=job
  job.shapes={{vertices=vertices,count=1}};job.shape_index=1;job.triangle_index=0
  job.triangles={};job.centre=centre;job.unsupported=0;job.complete_query=true;job.max_triangles=100
- local mapped=mcpos(centre);job.bounds={min_x=mapped.x-cfg.collision_radius,min_y=mapped.y-cfg.collision_radius,
-  min_z=mapped.z-cfg.collision_radius,max_x=mapped.x+cfg.collision_radius,
-  max_y=mapped.y+cfg.collision_radius,max_z=mapped.z+cfg.collision_radius}
+ local mapped=mcpos(centre);job.bounds={}
+ for _,axis in ipairs({'x','y','z'}) do
+  job.bounds['min_'..axis]=math.floor((mapped[axis]-cfg.collision_radius)/8)*8
+  job.bounds['max_'..axis]=math.ceil((mapped[axis]+cfg.collision_radius)/8)*8
+ end
  local published
  advance_collision({publish_collision_tris=function(region) published=region;native.collision_publish_seq=1;return true end,
    status=function() return native end},native)
@@ -129,12 +131,12 @@ return function()
  close3(exported_normal,{x=native_normal.x/scale_squared,y=native_normal.y/scale_squared,z=native_normal.z/scale_squared})
  assert(dot(native_normal,exported_normal)>0)
  local mapped_centre=mcpos(centre)
- close(published.min_x,math.floor(mapped_centre.x-cfg.collision_radius))
- close(published.max_x,math.ceil(mapped_centre.x+cfg.collision_radius))
- close(published.min_y,math.floor(mapped_centre.y-cfg.collision_radius))
- close(published.max_y,math.ceil(mapped_centre.y+cfg.collision_radius))
- close(published.min_z,math.floor(mapped_centre.z-cfg.collision_radius))
- close(published.max_z,math.ceil(mapped_centre.z+cfg.collision_radius))
+ close(published.min_x,math.floor((mapped_centre.x-cfg.collision_radius)/8)*8)
+ close(published.max_x,math.ceil((mapped_centre.x+cfg.collision_radius)/8)*8-1)
+ close(published.min_y,math.floor((mapped_centre.y-cfg.collision_radius)/8)*8)
+ close(published.max_y,math.ceil((mapped_centre.y+cfg.collision_radius)/8)*8-1)
+ close(published.min_z,math.floor((mapped_centre.z-cfg.collision_radius)/8)*8)
+ close(published.max_z,math.ceil((mapped_centre.z+cfg.collision_radius)/8)*8-1)
  print('PASS actual collision exporter preserves A/B/C and surface normal with nonzero tile/scale and region readiness')
  for _,case in ipairs({{radius=8,blocks=4},{radius=16,blocks=8},{radius=32,blocks=12},{radius=64,blocks=12}}) do
   cfg.collision_radius=case.radius

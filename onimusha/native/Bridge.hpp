@@ -1,5 +1,6 @@
 #pragma once
 #include "RenderStore.hpp"
+#include "CollisionPacking.hpp"
 #include <Windows.h>
 #include <functional>
 #include <deque>
@@ -26,6 +27,7 @@ public:
     bool input(std::uint16_t type,std::uint16_t code=0,std::int32_t a=0,std::int32_t b=0,std::int32_t c=0);
     bool publish_actors(std::span<const proto::ActorRecord> actors);
     bool publish_collision(std::uint32_t epoch,const proto::ColRegion& region,std::span<const proto::ColTri> triangles);
+    bool publish_packed_collision(std::uint32_t epoch,std::vector<CollisionPacket> packets);
     CollisionStatus collision_status();
     void invalidate_collision();
     std::vector<proto::McEvent> events();

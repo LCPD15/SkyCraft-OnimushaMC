@@ -5,29 +5,31 @@
 
 ## 最新结果与下一步
 
-MC 爆炸桥接已实现。用户确认：“爆炸能正常影响敌人，也能正常销毁方块”。
-已保存第一轮 4 次 TNT 原生生成记录，MC→RE 坐标完全对应；Em104_00、Em106_00 原生受击入口、
-特效、声音调用均有记录，普通命中原生伤害 1500，剩余 HP 不足时正常归零。
-来源 `logs/explosion-probe-20261007/tnt-first-live-*`，完整实现与限制见 ONIMUSHA-EXPLOSION.md。
-当前能力只标记油桶资源/工厂就绪，不把所有战斗边界当作通过。MC 爆炸强度暂不缩放原生范围/伤害。
+用户已确认铁傀儡能正常站立和寻路，原先13/14边界不再闪断。
+另一处接管中断已定位：同一stage:0:area:13、同一epoch，没有Stage transition，
+14次地形转换超过1200万次工作上限，4次角色走出旧覆盖。不要再把这次失败归因于AreaID。
+已用只读原生查询捕获故障位置3494面及完整格边界5107面；旧算法离线均复现失败。
+详见 ONIMUSHA-DYNAMIC-TERRAIN.md。另2次Waiting for Minecraft world短暂状态未单独定位。
 
-铁傀儡近处攻击曾通过，但寻路候选799536游戏实测失败：生成掉地、拆块悬空、区域切换闪回。
-本次已改为服务器端Mob精确三角面碰撞、生成高度修正、未知地形暂停；详见 ONIMUSHA-MOB-TERRAIN.md。
-日志确认7次Stage transition来自连续区域13/14误拆成两套坐标；另1次为地形查询覆盖越界。
-已离线备份并迁移 area14 的一个有方块区块至area13，其他NBT逻辑与背包不变。
-别名文件 reframework/data/onimusha_mc_world_aliases.json 是当前存档专用，不能分发给未迁移存档。
+新版：完整8格查询边界+0.002格halo，保留旧完整覆盖直到新批次消费确认；
+表面体素转换降低无效工作量，保持原有工作上限，新增数值副本后台线程。
+票据/发布/消费三阶段分开，epoch/PID/generation改变时丢弃后台旧结果。
+3组原生CTest通过，23个Lua回归通过（两个旧边界断言已更新并复测）。
+真实两份地形重放全部成功。游戏内跨区域路线尚待用户验收，不宣布已完全解决。
+Fabric JAR未改动，不需重复铁傀儡建造道具发放或区域13/14迁移。
 
-真实隔离MC/Fabric运行 smoke-b 三项通过：嵌入地面生成后落稳；删除真实垫块后下落到地面；
-从约8格外主动追击目标且原生模拟主机收到攻击。smoke-a中NoAI停了物理，已修正测试后重跑。
-61个Java单元测试、23个Lua回归通过。鬼武者内的同三项和边界行为仍待用户复测。
+20:00已按既有授权关闭游戏，MC正常保存退出；64文件完整世界备份且哈希验证：
+`runtime/test-backups/before-dynamic-terrain-20261007-200301`。
+20:21新版DLL与主Lua已安装，14个受管文件哈希一致，存档全部64文件与备份一致。
+安装收据 `logs/dynamic-area-20261007-194446/installation.json`，临时只读捕获代码已移除。
+唯一autorun仍是loader，不需要手工Reset Scripts。
 
-19:30 新JAR与Lua已安装并核对，DLL不变。安装记录 logs/golem-fall-stream-20261007-185910/installation.json。
-完整存档备份 runtime/test-backups/before-mob-ground-20261007-191302（62文件），包括旧JAR、Lua和映射。
-所有游戏/MC/测试主机均已正常退出。启动参数已恢复原世界 OnimushaMC-XYZ-v2、生产mapping和举剑格挡。
-
-当前已向用户提问：请重启鬼武者进入场景，F10保持关闭；等待其回复，勿重复提问。
-用户进场景后启动原MC世界（StartHidden/QuitWithHost/SwordBlocking），核对连接/地形和别名后再测试。
-不重复发道具；不删除/恢复旧测试世界。电脑自动输入继续停止，真实操作由用户完成。
+已请求用户启动游戏进场景，暂不F10。收到回复后：核实当前游戏PID/进程路径和新状态；
+启动原世界：`G:/Onimusha_MC_mod/tools/MC-launch-dev.ps1 -WorldName OnimushaMC-XYZ-v2
+-LogPrefix live-dynamic-terrain-20261007 -StartHidden -QuitWithHost -SwordBlocking`。
+确认MC连接、碰撞异步job published、消费ACK/host_ready后，再让用户F10开启沿旧断联路线往返，
+继续走远一点，测试后保持开启读取日志。**当前启动问题已发出，不要重复提问。**
+不要模拟键鼠输入；实际游戏操作由用户完成。不要杀MC Java，关游戏后等待保存退出。
 
 ## 本轮实现与道具
 
@@ -36,7 +38,7 @@ MC 爆炸桥接已实现。用户确认：“爆炸能正常影响敌人，也�
 主 shell 自动创建伤害/效果子 shell；不能把 getShellPackage 的索引误当 fixed ID。
 所有生产对象重新分配/通过当前拥有者解析，不重用采样指针或修改共享资源。
 
-现有 DLL 无需改变。flags bit7 表示原生爆炸能力；EV3 的 formId=事件ID、weapon=epoch、flags=1。
+爆炸协议本轮未改变。flags bit7 表示原生爆炸能力；EV3 的 formId=事件ID、weapon=epoch、flags=1。
 MC 在事件确实入队时抑制该次敌人代理爆炸伤害，避免与原生 AoE 重复；MC 保留自伤与方块破坏。
 原生子 shell `_EnableSelfDamage=false`，以当前玩家为 owner。跨进程最终 ACK 尚未实现；不确定原生失败不重试。
 爆炸占用尾段加入 loader busy 门控，所有新 hook 继续由唯一项目重载器管理。
@@ -53,7 +55,7 @@ MC 在事件确实入队时抑制该次敌人代理爆炸伤害，避免与原�
 禁止重建旧同名 autorun。爆炸生产逻辑封装在 enemy_hit 末尾独立 scope，探针在 combat_inventory 末尾。
 重载工具 G:/Onimusha_MC_mod/tools/Reload-OnimushaScripts.ps1 自动关闭接管、等待恢复和 native busy 清空。
 当前进程是新启动；上个进程最后自动重载 gen11 / 302b3179577c4990a261936684539ebf。
-DLL 和 loader 均未改动，不需手工 Reset。
+DLL与主Lua本轮已更新，loader未改动，不需手工 Reset。
 
 安装工厂开关 reframework/data/onimusha_explosion_control.json；日志 onimusha_explosion_status.json。
 能力位没有就绪时 MC 保留原代理爆炸命中路线（HIT_EXPLOSION=16），不会假称原生生成成功。
@@ -65,7 +67,7 @@ fire bit=8（此前误4，4是sweep）已经修复。近战10米、projectile/fi
 Fabric build 通过，61 个 Java 测试通过（含3个新增寻路测试）；23 个 Lua 回归脚本全部通过。
 新增3个Java作用域测试覆盖嵌套爆炸、异常清理、未入队本地结算；Lua覆盖去重、旧会话/非法输入拒绝、
 多个同时TNT、原生不确定结果不重试。真实 TNT/方块破坏已由用户确认。
-末地水晶、密集连锁、自伤精确去重、换场景资源独立加载、铁傀儡移动仍待覆盖；近处攻击已由用户确认通过。
+末地水晶、密集连锁、自伤精确去重、换场景资源独立加载、铁傀儡站立/寻路/近处攻击已由用户确认通过；更远区域待本轮复测。
 
 既有：MC普通/特殊两套全局攻击模板由当前玩家资产ID1/41解析，所有敌人共用，不要求逐敌/逐招采样。
 RSC活动受击范围聚合AABB，默认BODY部位；不能称已完成逐部位、装甲弱点或所有Boss阶段。
@@ -80,7 +82,7 @@ MC格挡无扣血并有声音已确认；红闪/击退/火花未逐项确认。
 
 ## 当前文件指纹
 
-- DLL: `5291E47D62D33D9ED8B7B95A9B285256C02E509D18115AAA0F6F104401F44931`
+- DLL: `D60C30148D0CBEE6B1727483500EC9AF1D366C15C3E3170AF5CFA6CC66EFD57F`
 - JAR: `5A64BF0D97B2CB8CDD6534E33C642A3C601431C8CE42817B5B865EB07EBD43C7`
-- main Lua: `FDC18992A51A620EA00197BB9E0002BD266A86693715517D4BDC226D11E89675`
+- main Lua: `A42D3AD1DE4A34037CDE82FC807B44A0AE17E1028A9AC003EC4F7BE21D814281`
 - enemy Lua: `7D0B6BB04D8A3DED75FE2FDE3110CBFF0F90B343190846EEC4EBB7B74C11F279`

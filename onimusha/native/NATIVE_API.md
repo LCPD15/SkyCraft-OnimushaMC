@@ -54,7 +54,7 @@ HUD rendering keep their existing layout. Terrain and avatar remain CullNone.
   collision_head,collision_tail,collision_ring_valid,collision_pack_ms,
   collision_pack_max_ms,collision_pack_failures,collision_queue_failures,
   collision_failure`. Generations/sequences/byte counters are exact Lua integers.
-  Pack time covers synchronous packing, not the whole Lua query or render frame;
+  Pack time covers CPU packing (on the background worker when requested), not the whole Lua query or render frame;
   packing and queue failures are separate cumulative counters.
 * `publish_actors(array)` rows: `id,flags,x,y,z,yaw,width,height,health_frac,level,name`.
   Stable nonzero IDs must map back to the host's live enemies. Maximum 256 rows.
@@ -63,10 +63,25 @@ HUD rendering keep their existing layout. Terrain and avatar remain CullNone.
   Maximum 100,000 triangles. Triangle winding must be correct for collision.
   Original-world diggable flag is stripped: this release supports adding/removing
   MC blocks, never removal of the original game terrain. Returns bool.
+  With `async=true`, returns a positive integer job ticket, or false if rejected.
+  `status()` non-blockingly advances that one worker and reports
+  `collision_async_supported,collision_job_id,collision_job_state,
+  collision_job_error,collision_job_publish_seq`. States: idle/packing/published/failed/discarded.
+  The worker owns numeric triangles only and never calls RE, Lua, GPU or shared
+  memory APIs. The calling thread commits a complete batch after checking the
+  original epoch, connection generation, MC PID and prior publication sequence.
+  Epoch changes and reconnects discard late results. A ticket is NOT publication:
+  require published plus the matching sequence, then the existing consumer ACK.
+  Old consumed coverage stays usable during packing. Only one worker can exist.
   Native packing splits arbitrary bounds into Fabric's aligned eight-block cells,
   streams both exact triangles and 1/8-block surface occupancy. Empty cells are
   also marked known so Minecraft can safely release its teleport hold. Packing
   rejects more than 1024 cells or 12 million voxel overlap checks in one update.
+  Surface rasterization prunes the empty third dimension with the dominant
+  triangle plane; the same SAT decides actual occupancy. Bounds/voxel centers use
+  double precision before local float SAT, preserving subcells in far world tiles.
+  The caller must query every entire replaced 8-block cell, including a small
+  boundary halo. Pack padding alone does not prove the area was queried.
   Bounds must be finite, ordered, and within +/-30,000,000 blocks; validation
   happens before floating-point-to-integer conversion or region arithmetic.
   Packing finishes before queue capacity is checked for the whole batch,
