@@ -31,9 +31,11 @@ local player_go=obj('via.GameObject',{
 local player=obj('player',{get_GameObject=function() return player_go end})
 local info=obj('info',{get_Character=function() return player end})
 local pm=obj('pm',{isPlayerReady=function() return true end,getControllingPlayerInfo=function() return info end})
+paused=false
+local pause=obj('app.PauseManager',{get_IsMenuPause=function() return paused end,get_IsPlayerPause=function() return paused end})
 scene=obj('scene',{});enabled=false;prefab_ready=false;mesh_ready=false;hit_own=false
 control={enabled=true,id='physics1',action='physics_cube'}
-instantiations=0;destroys=0;standby=false;valid=false;draw=false;collider_enabled=true;nav_enabled=false
+instantiations=0;render_creates=0;resources={};destroys=0;standby=false;valid=false;draw=false;collider_enabled=true;nav_enabled=false
 local loaded_stem='unit_collision'
 local maps={'AIMap_Zako','AIMap_MidBoss','AIMap_Boss','AIMap_Water'}
 local nav=obj('via.navigation.AIMapEffector',{
@@ -55,6 +57,7 @@ mesh=obj('via.render.Mesh',{set_Enabled=function() end,set_StaticMesh=function()
  get_MaterialNum=function() return 1 end,get_Enabled=function() return true end,
  get_RenderOutputID=function() return 31 end,get_DrawShadowCast=function() return true end,get_WorldAABB=function() return {} end})
 go=obj('via.GameObject',{get_Valid=function() return valid end,set_Name=function() end,set_DrawSelf=function(b) draw=b end,
+ get_Transform=function() return {set_position=function(_,p) last_position=p end} end,
  get_Draw=function() return draw end,get_Update=function() return true end,get_Folder=function() return folder end,
  ['getComponent(System.Type)']=function(t)
   if t=='via.navigation.AIMapEffector' then return nav end
@@ -78,7 +81,7 @@ json={load_file=function(path)
  return control
 end,dump_file=function(_,r) status=r end}
 re={on_application_entry=function(_,fn) tick=fn end,on_script_reset=function(fn) reset=fn end}
-sdk={get_tdb_version=function() return 82 end,get_managed_singleton=function() return pm end,
+sdk={get_tdb_version=function() return 82 end,get_managed_singleton=function(t) if t=='app.PauseManager' then return pause end;return pm end,
  get_native_singleton=function(t) return t end,
  call_native_func=function(_,_,name)
   if name=='get_CurrentScene' then return scene end
@@ -100,9 +103,12 @@ sdk={get_tdb_version=function() return 82 end,get_managed_singleton=function() r
    ['setRay(via.vec3, via.vec3)']=function(a,b) assert(b.x-a.x==4 and b.y==a.y and b.z==a.z) end}
   return obj(t,methods)
  end,
- create_resource=function(t,p) return {add_ref=function() end,release=function() end,
+ create_resource=function(t,p) resources[#resources+1]=p;return {add_ref=function() end,release=function() end,
   create_holder=function() return obj('holder',{}) end} end,
  find_type_definition=function(t) return {get_runtime_type=function() return t end,get_method=function(_,m)
+  if t=='via.GameObject' and m=='create(System.String, via.Folder)' then
+   return {call=function(_,_,name,f) assert(f==folder);render_creates=render_creates+1;valid=true;return go end}
+  end
   assert(t=='via.GameObject' and m=='destroy(via.GameObject)')
   return {call=function(_,_,o) assert(o==go and not collider_enabled and not nav_enabled);destroys=destroys+1;valid=false end}
  end} end}
@@ -138,4 +144,25 @@ assert(status.phase=='failed' and status.error:find('Unsupported probe action') 
 control={enabled=true,id='remove-nav',action='remove'};frames(45)
 assert(status.destroyed and not nav_enabled and not collider_enabled)
 print('PASS quarantined navigation action is refused before allocating any object')
+local old_resources=#resources
+control={enabled=true,id='bad-section',action='render_section',asset_id='../not-owned',section_min={x=1,y=2,z=3}};frames(30)
+assert(status.phase=='failed' and #resources==old_resources and render_creates==0)
+print('PASS section resource paths cannot escape the private asset directory')
+control={enabled=true,id='merged-section',action='render_section',asset_id='section_0123456789abcdef0123',section_min={x=1,y=2,z=3}}
+paused=true;frames(660)
+assert(status.phase=='waiting_gameplay' and status.pending_id=='merged-section' and render_creates==0 and #resources==old_resources)
+print('PASS paused gameplay waits without allocating or consuming the request')
+paused=false
+mesh_ready=false;frames(30);assert(render_creates==1 and not draw)
+assert(last_position.x==2 and last_position.y==-1.95 and last_position.z==0)
+assert(resources[#resources]=='mod/onimusha_mc/sections/section_0123456789abcdef0123/section_0123456789abcdef0123.mdf2')
+paused=true;frames(660);assert(valid and status.phase=='loading' and not draw and not status.error)
+paused=false
+print('PASS pausing during resource load does not consume the unpaused timeout')
+mesh_ready=true;frames(30);assert(status.phase=='visible' and status.ready and draw and not status.collision)
+assert(instantiations==2 and render_creates==1)
+print('PASS merged section waits for mesh/material, preserves section-local placement, creates no collider')
+enabled=true;tick();assert(status.phase=='removed_guard' and not valid and not draw)
+frames(15);assert(status.destroyed and not status.ready)
+print('PASS takeover removes the independent section display probe')
 ''')

@@ -573,7 +573,7 @@ end
 local function report()
     local r={id=q.id,frame=q.frame,phase=q.phase,error=q.error,position=q.position,
         scene=q.scene_address,object_name=q.name,ground=q.ground,ready=q.ready,destroyed=q.destroyed,
-        collision=q.collision,action=q.action}
+        collision=q.collision,action=q.action,asset_id=q.asset_id,pending_id=q.pending_id}
     if q.prefab then r.prefab_ready=call(q.prefab,'get_Ready') end
     if q.go and call(q.go,'get_Valid') then
         r.owner={address=q.go:get_address(),valid=true,draw=call(q.go,'get_Draw'),update=call(q.go,'get_Update'),
@@ -602,7 +602,7 @@ local function cleanup(reason)
         call(q.prefab,'set_Standby',false)
     end
     q.go=nil;q.mesh=nil;q.colliders=nil;q.collider=nil;q.prefab=nil;q.loader=nil;q.folder=nil;q.cc=nil
-    q.mesh_holder=nil;q.material_holder=nil;q.phase=reason or 'removed';q.destroyed=#q.retired==0
+    q.mesh_holder=nil;q.material_holder=nil;q.phase=reason or 'removed';q.destroyed=#q.retired==0;q.ready=false;q.pending_id=nil
     q.ray_query=nil;q.ray_result=nil
 end
 local function resource_holder(resource_type,holder_type,path)
@@ -686,17 +686,29 @@ local function start(c)
     local pm=sdk.get_managed_singleton('app.PlayerManager');assert(call(pm,'isPlayerReady',false))
     local player=call(call(pm,'getControllingPlayerInfo'),'get_Character')
     local go=call(player,'get_GameObject');local sc=assert(scene_now());local folder=assert(call(go,'get_Folder'))
-    q.ground=ground_query(player)
+    q.ground=c.action~='render_section' and ground_query(player) or nil
     q.phase='ground_read';report()
     if c.action=='inspect_ground' then return end
-    assert(c.action=='render_cube' or c.action=='physics_cube','Unsupported probe action')
+    assert(c.action=='render_cube' or c.action=='physics_cube' or c.action=='render_section','Unsupported probe action')
     local p=call(go,'get_Transform'):get_position()
     q.position={x=p.x+3,y=p.y+0.55,z=p.z+3};q.name='OMC_NativeProbe_'..c.id
     q.scene_address=sc:get_address();q.start=q.frame;q.ready=false;q.destroyed=false;q.collision=nil;q.action=c.action
-    local stem=c.action~='render_cube' and 'mc_stone_cube' or 'unit_cube'
-    q.mesh_holder=resource_holder('via.render.MeshResource','via.render.MeshResourceHolder','mod/onimusha_mc/probe/'..stem..'.mesh')
-    q.material_holder=resource_holder('via.render.MeshMaterialResource','via.render.MeshMaterialResourceHolder','mod/onimusha_mc/probe/'..stem..'.mdf2')
-    if c.action~='render_cube' then
+    q.asset_id=nil
+    local stem=c.action=='physics_cube' and 'mc_stone_cube' or 'unit_cube'
+    local resource_path='mod/onimusha_mc/probe/'..stem
+    if c.action=='render_section' then
+        assert(type(c.asset_id)=='string' and #c.asset_id==28 and c.asset_id:match('^section_%x+$'),'Invalid private section asset id')
+        assert(type(c.section_min)=='table','Missing section-local bounds')
+        for _,axis in ipairs({'x','y','z'}) do
+            local v=c.section_min[axis]
+            assert(type(v)=='number' and v==v and v>=-16 and v<=32,'Invalid section-local bounds')
+        end
+        q.asset_id=c.asset_id;resource_path='mod/onimusha_mc/sections/'..q.asset_id..'/'..q.asset_id
+        q.position={x=p.x+3-c.section_min.x,y=p.y+0.05-c.section_min.y,z=p.z+3-c.section_min.z}
+    end
+    q.mesh_holder=resource_holder('via.render.MeshResource','via.render.MeshResourceHolder',resource_path..'.mesh')
+    q.material_holder=resource_holder('via.render.MeshMaterialResource','via.render.MeshMaterialResourceHolder',resource_path..'.mdf2')
+    if c.action=='physics_cube' then
         -- sdk.deserialize cannot resolve its native entry on this game build.
         -- Load our private inert UserData holder through the resource system.
         -- Native prefab instantiation owns registration of its Colliders.
@@ -724,6 +736,12 @@ re.on_application_entry('LateUpdateBehavior',function()
         end
         if q.go or q.prefab or q.loader then
             local sc=scene_now()
+            if q.action=='render_section' and q.phase=='loading' then
+                local pause=sdk.get_managed_singleton('app.PauseManager')
+                if pause and (call(pause,'get_IsMenuPause') or call(pause,'get_IsPlayerPause')) then
+                    q.start=q.start+1;q.object_start=q.object_start+1
+                end
+            end
             if not sc or sc:get_address()~=q.scene_address or (_G.onimusha_mc and _G.onimusha_mc.status().enabled)
                 or q.frame-q.start>18000 then cleanup('removed_guard');report();return end
             if q.phase=='loading_userdata' then
@@ -760,8 +778,17 @@ re.on_application_entry('LateUpdateBehavior',function()
         end
         if q.frame%30~=1 then return end
         local c=json.load_file(CONTROL)
+        if q.pending_id and (not c or c.enabled~=true) then
+            q.pending_id=nil;q.phase='idle';report()
+        end
         if c and c.enabled==true and type(c.id)=='string' and c.id~=q.id then
-            q.id=c.id;q.error=nil
+            if c.action=='render_section' and not q.go and not q.prefab and not q.loader then
+                local pause=sdk.get_managed_singleton('app.PauseManager')
+                if not pause or call(pause,'get_IsMenuPause') or call(pause,'get_IsPlayerPause') then
+                    q.pending_id=c.id;q.phase='waiting_gameplay';q.error=nil;report();return
+                end
+            end
+            q.id=c.id;q.pending_id=nil;q.error=nil
             if c.action=='remove' then cleanup('removed');report()
             else start(c) end
         end

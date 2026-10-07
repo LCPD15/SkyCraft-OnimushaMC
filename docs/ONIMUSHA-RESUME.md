@@ -1,9 +1,29 @@
 # 继续测试的停点 / Resume checkpoint
 
-2026-10-07，仅适用于 OnimushaWotS 01.000.001 / TDB82 / REFramework b6baf6b406efc65e077b99cb4d9ad25b0a0a9095。
+2026-10-08，仅适用于 OnimushaWotS 01.000.001 / TDB82 / REFramework b6baf6b406efc65e077b99cb4d9ad25b0a0a9095。
 其他 RE 游戏需要独立适配。MOD制作：LCPD15/LCPD拉灯。
 
 ## 最新结果与下一步
+
+### 00:30新增结果：原生合并区块模型实景通过
+
+1280完整方块碰撞同步已通过下面四项用户实测，并保存本地提交8d7915b。
+随后离线实现REN_SECTION/REN_ATLAS→原生合并MESH/MDF/TEX工具，
+用户确认五个石头/铁块的合并测试模型“显示、光照和遮挡均正常”。
+它是协议格式的人工测试几何+真实MC贴图，**不是实时MC世界区块，实时原生绘制仍未接入**。
+详见 [原生区块模型原型](ONIMUSHA-NATIVE-SECTION-PROTOTYPE.md)。
+
+试验请求 merged-mc-section-20261008-b已就绪/实景通过/撤除，destroyed=true。
+第一次a请求因游戏暂停、对象Update=false而加载超时；用户回到场景后同一文件成功。
+源码探针已加入暂停等待与清理ready=false，回归通过且已热加载。
+唯一loader最新generation3，id `63b819d4a29a442aa77ebcbdd3a4dfd6`，phase=loaded。
+游戏PID122276、MC PID18704继续运行，F10关闭，没有待回复问题；物体探针enabled=false。
+部署manifest现26项已核对。此阶段只更新combat_inventory payload并添加3个显示测试资源，
+没有更换DLL/JAR，也没有更改MC存档。原生导航仍停用。
+
+下一步：有界实时section/atlas捕获与后台转换、资源生命周期和精确版本回执后切换绘制。
+禁止把当前离线Blender转换器逐帧调用；禁止提前隐藏原overlay或宣称全部MC内容已受原生光照。
+日志/备份 `logs/native-section-20261008/`；生成资源 `assets/native-sections/`。
 
 ### 当前候选：1280 原生完整方块碰撞同步，protocol 13
 
