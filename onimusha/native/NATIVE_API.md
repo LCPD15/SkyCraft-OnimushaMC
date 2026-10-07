@@ -1,6 +1,6 @@
 # Native bridge / Lua adapter interface
 
-The DLL creates `Local\OnimushaMC_v1` at protocol version 12. It registers
+The DLL creates `Local\OnimushaMC_v1` at protocol version 13. It registers
 `onimusha_mc` when REFramework creates a Lua 5.4 state. Its Lua dependency is the
 unmodified Lua 5.4.3 source vendored by the user's installed REFramework commit
 `b6baf6b406efc65e077b99cb4d9ad25b0a0a9095`; upgrading REFramework requires checking
@@ -87,7 +87,7 @@ HUD rendering keep their existing layout. Terrain and avatar remain CullNone.
   Packing finishes before queue capacity is checked for the whole batch,
   including a new-epoch CLEAR and wrap padding. Failure publishes no packet and
   does not advance the successful epoch/sequence. Success copies every packet
-  and commits the producer head once; protocol v12 is unchanged.
+  and commits the producer head once; the collision layout from v12 is unchanged.
   A successful return proves complete queue publication, not client consumption.
   Save `collision_publish_seq` plus generation/PID/epoch after success, and wait
   for connected + matching context + `collision_consumed_seq>=target` before
@@ -105,8 +105,24 @@ HUD rendering keep their existing layout. Terrain and avatar remain CullNone.
   query intersection covering the player's feet/body; different epoch/generation,
   disconnect, or leaving coverage must release control. All refreshed query parts
   must be complete; triangle count truncation must not certify a whole AABB.
-* `drain_solids()` returns up to 8192 block changes `{x,y,z,solid}` per call. The
-  adapter creates/removes RE collision objects and must retain them until removed.
+* `drain_solids()` is the disabled legacy experimental path. Its bits indicate any
+  nonempty collision shape and must not be interpreted as full-cube geometry.
+* `snapshot_full_cubes({x,y,z,radius,limit,epoch})` is a nondestructive nearest-cube
+  snapshot, with radius at most 16 blocks and limit at most 1280. Returns `ready`,
+  `epoch`, `world_id`, `mc_pid`, `generation`, `revision`, `total`, `truncated`, and
+  `cubes=[{x,y,z},...]`; malformed requests or a mismatched epoch return nil.
+  REN_FULL_CUBES=12 carries a 32-byte context-tagged section header and the same
+  x+16z+256y bit order, but only for one exact [0,1]^3 collision box. Slabs, fences,
+  stairs and other partial shapes are excluded, never expanded to solid cubes.
+  Changes replace the whole section, including zero-count deletion. PID, world,
+  epoch and generation changes clear the cache; a producer REN_CLEAR_ALL fence
+  is required before new cube snapshots become ready. Store decoding is atomic
+  on malformed payloads. Truncation is explicit and selects nearest cubes first.
+  The prefab adapter is opt-in (`enable_prefab_block_colliders`), units=1 only,
+  with two allocations and 16 rotating object checks per frame. Deferred removals
+  count toward the 1280-object cap. F10 off, stale snapshots, stopped host updates,
+  scene change, disconnect and reload retire owned colliders. It does not add
+  navigation, original-terrain destruction, or native MC scene rendering.
 * `set_camera({view_proj,origin_x,origin_y,origin_z,valid,binding_ready})`. The optional
   matrix has 16 column-major floats and operates on positions relative to origin
   in MC blocks. If unavailable, renderer can derive MC projection; `binding_ready`

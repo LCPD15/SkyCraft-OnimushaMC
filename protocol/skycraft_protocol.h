@@ -13,7 +13,7 @@
 namespace skycraft::proto
 {
 	inline constexpr std::uint32_t kMagic = 0x43594B53;  // "SKYC"
-	inline constexpr std::uint32_t kVersion = 12;
+	inline constexpr std::uint32_t kVersion = 13;
 	inline constexpr wchar_t       kMappingName[] = L"Local\\OnimushaMC_v1";
 
 	// 1 Minecraft block == 70 Skyrim units (Skyrim player ~128 units tall, MC player 1.8 blocks).
@@ -368,6 +368,7 @@ namespace skycraft::proto
 		                      // section NPCs collide with (sent after its kRenSection; 0 = none)
 		kRenDug = 11,         // RenDug + 512-byte bitset (bit x + 16z + 256y): which blocks of a section
 		                      // were dug out of Skyrim's world (its geometry there is gone); 0 = none
+		kRenFullCubes = 12,   // Onimusha: exact unit-cube collision shapes, context-tagged section replacement.
 		kRenRagdoll = 9,      // RenAvatar + RenBatch[] + RenVertex[]: the player's body standing still,
 		                      // relative to the feet and facing +Z, split into its parts (RenBatch
 		                      // flags bits 8-11: RagdollPart). Sent about once a second while alive;
@@ -379,6 +380,13 @@ namespace skycraft::proto
 		std::int32_t  sx, sy, sz;  // section coords, as in RenSection
 		std::uint32_t count;       // solid blocks (0: none, and no bitset follows)
 	};
+	struct RenFullCubes
+	{
+		std::int32_t sx, sy, sz;
+		std::uint32_t count; // 0: remove section, otherwise exactly 512 bytes; x + 16z + 256y
+		std::uint32_t worldId, epoch, mcPid, reserved; // reserved must be zero
+	};
+	static_assert(sizeof(RenFullCubes) == 32);
 
 	struct RenDug
 	{

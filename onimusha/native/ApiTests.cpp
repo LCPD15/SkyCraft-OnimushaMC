@@ -55,7 +55,11 @@ int wmain(int argc,wchar_t** argv){
     const char* script=R"(
         assert(type(onimusha_mc)=="table")
         local s=onimusha_mc.status()
-        assert(s.protocol==12 and s.mapping=="Local\\OnimushaMC_v1")
+        assert(s.protocol==13 and s.mapping=="Local\\OnimushaMC_v1")
+        assert(onimusha_mc.snapshot_full_cubes({})==nil)
+        assert(onimusha_mc.snapshot_full_cubes({x=0,y=0,z=0,radius=16,limit=1281,epoch=0})==nil)
+        local cubes=onimusha_mc.snapshot_full_cubes({x=0,y=0,z=0,radius=16,limit=1280,epoch=0})
+        assert(cubes and not cubes.ready and #cubes.cubes==0)
         assert(not s.enabled and not s.ready and not s.connected)
         assert(s.not_ready_reason=="disabled" and s.collision_generation>0 and s.collision_publish_seq==0 and s.collision_consumed_seq==0 and not s.re_ui_sampled)
         assert(math.type(s.collision_generation)=="integer" and math.type(s.collision_publish_seq)=="integer" and math.type(s.collision_consumed_seq)=="integer")

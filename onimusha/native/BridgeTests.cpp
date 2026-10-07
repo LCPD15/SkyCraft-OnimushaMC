@@ -3,6 +3,7 @@
 #include "InputRouting.hpp"
 #include "CollisionBatchTests.hpp"
 #include "CollisionSurfaceTests.hpp"
+#include "FullCubeTests.hpp"
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -106,5 +107,6 @@ int wmain(int argc,wchar_t** argv){
     auto* rr=base+proto::kOffRenderRing;*reinterpret_cast<proto::ColMsgHeader*>(rr+proto::kRenRingDataOff)={proto::kRenAtlas,0xFFFFFFFFu};*reinterpret_cast<std::uint64_t*>(rr)=8;link.drain_render(store);check(link.rejected>0&&*reinterpret_cast<std::uint64_t*>(rr+proto::kRenRingTailOff)==8,"malformed ring skipped within bounds");
     omc::tests::collision_batch_tests(check);
     omc::tests::collision_surface_tests(check);
+    omc::tests::full_cube_tests(check);
     std::printf("%d failure(s)\n",failures);return failures?1:0;
 }

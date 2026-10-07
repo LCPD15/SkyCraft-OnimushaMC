@@ -11,6 +11,7 @@ local defaults = {
     block_collider_resource="mod/onimusha_mc/unit_box.rcol",
     diagnostic_only=true, install_control_hooks=false,
     enable_native_block_colliders=false,
+    enable_prefab_block_colliders=false,
     enable_block_collider_tests=false, enable_health_hook_tests=false,
     enable_terrain_queries=false,
 }
@@ -32,6 +33,7 @@ local function read_config()
     result.enable_terrain_queries=not result.diagnostic_only and result.enable_terrain_queries
     result.enable_health_hook_tests=result.runtime_stage=="C" and not result.diagnostic_only and result.enable_health_hook_tests
     result.enable_native_block_colliders=result.runtime_stage=="C" and not result.diagnostic_only and result.enable_native_block_colliders
+    result.enable_prefab_block_colliders=result.runtime_stage=="C" and not result.diagnostic_only and result.enable_prefab_block_colliders
     result.enable_block_collider_tests=result.enable_native_block_colliders and result.enable_block_collider_tests
     -- This Onimusha build uses a verified local -Z camera and an identity XYZ world basis.
     -- Old sign=+1 settings described the former reflected basis; never reuse that override.
@@ -268,11 +270,13 @@ local function destroy_box(box)
     end
 end
 local function clear_boxes()
+    if _G.onimusha_native_blocks then _G.onimusha_native_blocks.stop() end
     for _,box in pairs(state.blocks) do destroy_box(box) end
     state.blocks={};state.solid_backlog={}
     if state.collider_probe then destroy_box(state.collider_probe);state.collider_probe=nil end
 end
 local function set_boxes_enabled(enabled)
+    if not enabled and _G.onimusha_native_blocks then _G.onimusha_native_blocks.stop() end
     if state.boxes_enabled==enabled then return end
     for _,box in pairs(state.blocks) do
         if box.component then
@@ -2273,6 +2277,14 @@ local function tick()
     -- verified RequestSetCollider registration; pending updates remain visible diagnostics.
     -- Leave native's update queue intact until a verified collider sink is available.
     apply_solids(bridge)
+    local blocks=_G.onimusha_native_blocks
+    if blocks then
+        if cfg.enable_prefab_block_colliders then
+            blocks.update({bridge=bridge,units=cfg.units_per_block,scene=addr(s),epoch=state.epoch,world_id=state.world_id,
+                mc_pid=native.mc_pid,generation=native.collision_generation,x=mc.x,y=mc.y,z=mc.z,
+                folder=strictcall(strictcall(state.player,"get_GameObject"),"get_Folder"),to_native=repos})
+        else blocks.stop() end
+    end
 end
 re.on_pre_application_entry("UpdateBehavior",function()
     state.camera_observation_phase="before_update_behavior"
@@ -2311,6 +2323,7 @@ re.on_application_entry("LateUpdateBehavior",function()
             enemy_diagnostic=state.enemy_diagnostic,
             pending_native_block_colliders=state.pending_native_block_colliders,query=state.query_diagnostic,
             block_colliders=state.collider_diagnostic,native_block_count=state.native_block_count,
+            prefab_blocks=_G.onimusha_native_blocks and _G.onimusha_native_blocks.status(),
             collider_ray=state.collider_ray_diagnostic,
             camera_axis=state.camera_axis_diagnostic,
             camera_projection=state.camera_projection_diagnostic,camera_projection_error=state.camera_projection_error,
@@ -2353,6 +2366,7 @@ end)
 _G.onimusha_adapter_lifecycle={ready_for_reload=function()
     return not state.active and not restoration_pending() and not state.hidden
         and (state.health_bypass or 0)==0
+        and (not _G.onimusha_native_blocks or not _G.onimusha_native_blocks.busy())
 end}
 re.on_script_reset(function()
     if not cfg.diagnostic_only or restoration_pending() or state.hidden or state.collider_probe or next(state.blocks) then

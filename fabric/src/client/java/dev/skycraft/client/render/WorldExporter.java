@@ -4,6 +4,7 @@ import com.mojang.blaze3d.vertex.QuadInstance;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.skycraft.SkyCraft;
 import dev.skycraft.link.Proto;
+import dev.skycraft.link.FullCubeSection;
 import dev.skycraft.link.SkyLink;
 import dev.skycraft.world.SkyClip;
 import it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet;
@@ -68,6 +69,9 @@ public final class WorldExporter {
 	private static final LongOpenHashSet SENT = new LongOpenHashSet(); // sections Skyrim holds a mesh for
 	private static final LongOpenHashSet LIT = new LongOpenHashSet(); // sections Skyrim holds lights for
 	private static final LongOpenHashSet SOLID = new LongOpenHashSet(); // sections Skyrim holds NPC collision for
+	private static final LongOpenHashSet FULL_CUBES = new LongOpenHashSet();
+	private static final FullCubeSection CUBES = new FullCubeSection();
+	private static final int MC_PID = (int) ProcessHandle.current().pid();
 	private static final long[] SOLID_BITS = new long[64]; // 4096 blocks: bit x + 16z + 256y
 	private static final LongOpenHashSet DUG = new LongOpenHashSet(); // sections Skyrim holds dug cells for
 	private static final ByteBuffer LIGHTS = ByteBuffer.allocate(16 * 16 * 16 * 8).order(ByteOrder.LITTLE_ENDIAN);
@@ -110,7 +114,7 @@ public final class WorldExporter {
 		var host = dev.skycraft.client.SkyClient.sky();
 		if (sentGeneration != SkyLink.generation() || sentHostEpoch != host.collisionEpoch
 			|| sentWorldId != host.worldId || sentLevel != level || atlas == null || atlas.stale(minecraft)) {
-			resendEverything(minecraft, level);
+			if (!resendEverything(minecraft, level)) return;
 		}
 		meshDirtySections(level);
 		// Animated textures (water, lava, fire, ...): the frame for this game tick.
@@ -122,7 +126,9 @@ public final class WorldExporter {
 		AvatarExporter.frame(minecraft, atlas, partialTick);
 	}
 
-	private static void resendEverything(Minecraft minecraft, ClientLevel level) {
+	private static boolean resendEverything(Minecraft minecraft, ClientLevel level) {
+		// A full ring must not commit the new context without its clearing fence.
+		if (!SkyLink.writeRender(Proto.REN_CLEAR_ALL, ByteBuffer.allocate(0), null)) return false;
 		sentGeneration = SkyLink.generation();
 		sentHostEpoch = dev.skycraft.client.SkyClient.sky().collisionEpoch;
 		sentWorldId = dev.skycraft.client.SkyClient.sky().worldId;
@@ -135,13 +141,13 @@ public final class WorldExporter {
 		boolean ao = minecraft.options.ambientOcclusion().get();
 		blockRenderer = new ModelBlockRenderer(ao, true, minecraft.getBlockColors());
 		fluidRenderer = new FluidRenderer(minecraft.getModelManager().getFluidStateModelSet());
-		SkyLink.writeRender(Proto.REN_CLEAR_ALL, ByteBuffer.allocate(0), null);
 		ByteBuffer header = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(atlas.width).putInt(atlas.height).flip();
 		boolean ok = SkyLink.writeRender(Proto.REN_ATLAS, header, atlas.pixels.duplicate().clear());
 		SkyCraft.LOG.info("SkyCraft: sent {}x{} texture atlas to Skyrim ({})", atlas.width, atlas.height, ok ? "ok" : "FAILED");
 		SENT.clear();
 		LIT.clear();
 		SOLID.clear();
+		FULL_CUBES.clear();
 		DUG.clear();
 		dev.skycraft.client.SkyDigClient.resendAll();
 		// Everything already loaded needs meshing again; later chunk loads mark themselves dirty.
@@ -161,6 +167,7 @@ public final class WorldExporter {
 				}
 			}
 		}
+		return true;
 	}
 
 	private static void meshDirtySections(ClientLevel level) {
@@ -203,7 +210,7 @@ public final class WorldExporter {
 				dugCount += Long.bitCount(word);
 			}
 		}
-		if (empty && !SENT.contains(key) && !LIT.contains(key) && !SOLID.contains(key) && dugCount == 0 && !DUG.contains(key)) {
+		if (empty && !SENT.contains(key) && !LIT.contains(key) && !SOLID.contains(key) && !FULL_CUBES.contains(key) && dugCount == 0 && !DUG.contains(key)) {
 			return false; // nothing there and nothing to remove
 		}
 		MESH.reset();
@@ -211,6 +218,7 @@ public final class WorldExporter {
 		int lightCount = 0;
 		java.util.Arrays.fill(SOLID_BITS, 0L);
 		int solidCount = 0;
+		CUBES.clear();
 		MESH.cardinal = level.cardinalLighting();
 		if (!empty) {
 			BlockPos origin = SectionPos.of(sx, sy, sz).origin();
@@ -224,10 +232,16 @@ public final class WorldExporter {
 							continue;
 						}
 						// Blocks Skyrim's NPCs can't walk through (anything with a collision shape).
-						if (!state.getCollisionShape(level, pos).isEmpty()) {
+						var collisionShape = state.getCollisionShape(level, pos);
+						if (!collisionShape.isEmpty()) {
 							int bit = x + 16 * z + 256 * y;
 							SOLID_BITS[bit >> 6] |= 1L << (bit & 63);
 							solidCount++;
+							var boxes = collisionShape.toAabbs();
+							if (boxes.size() == 1) {
+								var box = boxes.getFirst();
+								if (FullCubeSection.unitBox(1,box.minX,box.minY,box.minZ,box.maxX,box.maxY,box.maxZ)) CUBES.add(x,y,z);
+							}
 						}
 						// Light-emitting blocks (torches, lava, glowstone, ...) light Skyrim's world too.
 						int emission = state.getLightEmission();
@@ -257,12 +271,20 @@ public final class WorldExporter {
 			Minecraft minecraft = Minecraft.getInstance();
 			DigWalls.add(level, sx, sy, sz, dug, digLookup, st -> cubeFaces(minecraft, st), MESH::wall);
 		}
-		if (MESH.vertexCount() == 0 && !SENT.contains(key) && lightCount == 0 && !LIT.contains(key) && solidCount == 0 && !SOLID.contains(key) && dugCount == 0
+		if (MESH.vertexCount() == 0 && !SENT.contains(key) && lightCount == 0 && !LIT.contains(key) && solidCount == 0 && !SOLID.contains(key) && !FULL_CUBES.contains(key) && dugCount == 0
 			&& !DUG.contains(key)) {
 			return true;
 		}
 		ByteBuffer header = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN).putInt(sx).putInt(sy).putInt(sz).putInt(MESH.vertexCount()).flip();
 		if (SkyLink.writeRender(Proto.REN_SECTION, header, MESH.bytes())) {
+			if (CUBES.count() > 0 || FULL_CUBES.contains(key)) {
+				var host = dev.skycraft.client.SkyClient.sky();
+				if (!SkyLink.writeRender(Proto.REN_FULL_CUBES,
+					CUBES.header(sx,sy,sz,host.worldId,host.collisionEpoch,MC_PID),CUBES.bits())) {
+					markDirty(sx,sy,sz);
+				} else if (CUBES.count() > 0) FULL_CUBES.add(key);
+				else FULL_CUBES.remove(key);
+			}
 			if (MESH.vertexCount() > 0) {
 				SENT.add(key);
 			} else {

@@ -5,6 +5,44 @@
 
 ## 最新结果与下一步
 
+### 当前候选：1280 原生完整方块碰撞同步，protocol 13
+
+已在单独石头方块验证原生显示/光照/遮挡、玩家和普通敌人阻挡、删除清理后，
+实现 MC 完整立方体的碰撞同步。**用户已确认放置阻挡敌人、拆除恢复通行、TNT清除碰撞，以及F10关闭后原角色恢复且无残留碰撞。**
+当前只实测少量方块；1280上限及分批创建有离线回归，尚未进行游戏内1280密集构建压力测试。
+用户指定上限1280；半径16，最近优先，最多每帧创建2个、轮流检查16个，退休中的对象也计入上限。
+非完整立方体（半砖/楼梯/栅栏等）暂不接入，不能强行用整块代替。MC整体仍为叠加渲染，导航停用。
+
+Protocol13新增 REN_FULL_CUBES=12，32字节头带world/epoch/MC PID，512字节位图全量替换section。
+DLL `snapshot_full_cubes` 返回最近方块快照与截断数量。拒绝旧会话、错误尺寸、错误位计数，
+连接generation变化后须先收到MC清空栅栏；Lua关闭接管/换场景/重载时清除自有碰撞。
+新第五个payload `onimusha_native_blocks.lua`，唯一autorun loader文件清单已更新。
+`enable_prefab_block_colliders=true`；旧 `enable_native_block_colliders` 和全部物体探针仍false。
+单位尺度只支持已实测1.0；无导航和新原生渲染组件。
+
+2026-10-07 23:22关闭游戏PID84716；MC PID85296于23:22:57正常保存退出。
+最新64文件完整世界/旧DLL/JAR/Lua/config/manifest备份：
+`runtime/test-backups/before-prefab-collision-20261007-233153`。
+候选部署收据 `logs/prefab-block-candidate-installation.json`，23个游戏文件哈希核对通过。
+安装工具 `onimusha/tools/Install-PrefabBlockCandidate.py` 只用于此次旧指纹迁移，不可不检查就反复运行。
+Fabric构建与JUnit通过，25个Lua回归通过（1280密集对象测试另有复测通过），3个原生CTest全部通过。
+本轮已更换DLL/JAR/loader/main；不要使用下方历史protocol12指纹作为当前安装值。
+
+新游戏PID122276、MC PID18704，原 `OnimushaMC-XYZ-v2` 世界，
+日志 `logs/live-prefab-collision-20261007.stdout.log`；协议13、相机/地形/连接ready。
+用户已通过放墙阻挡敌人→拆掉后恢复通行；读取时 count=ready=retiring=desired=0、phase=empty，render_invalid=0。
+TNT测试用户回复“方块被炸掉，敌人能正常经过”；F10关闭测试用户回复“恢复正常，没有残留碰撞”。
+最终状态 active=false、native.enabled=false、count=ready=retiring=desired=0、phase=disabled，render_invalid=0。
+当前接管关闭，游戏和MC保持运行，没有待回复问题。对应证据保存在
+`logs/remaining-engine-work-20261007/prefab-block-{place-break,tnt,f10-off}-user-*`。
+不要重复发道具，不要重新引爆原游戏油桶，不要开启导航实验。
+同PID的长时间MC停顿/心跳恢复后，generation变化会撤销方块缓存，需要MC重新发清空与快照；
+该恢复分支尚未进行实时验收，不能声称任意断连都已无缝恢复。
+
+### 历史记录：单方块实验与此前恢复
+
+以下记录保留事故和测试顺序。协议、部署、进程及验收状态以上方最新结果为准。
+
 动态地形用户已实测连续走上百米，只有一次闪断；用户明确要求暂不处理这一次，继续剩余工作。
 不要重新展开该闪断排查。不要模拟键鼠输入，实际游戏操作由用户完成。
 
@@ -45,7 +83,7 @@ MC角色原生材质/动画和处决也仍未完成。
 游戏目录中的payload为无导航版本，源码与部署指纹一致。
 老稳定提交df92eb8及动态地形候选包保留，不能用原生实验覆盖稳定发行包。
 
-## 本轮实现与道具
+## 历史记录：爆炸实现与道具
 
 只读油桶探针成功记录两个 Gm019_000 连锁爆炸（32事件、无错误）。探针在 combat_inventory payload 内，
 采样已停用；不要让用户重新采样。逻辑 ID 4 → fixed ID 6 →数组索引 4 → shl_g019_000_004 主 shell。
@@ -62,7 +100,7 @@ MC 在事件确实入队时抑制该次敌人代理爆炸伤害，避免与原�
 完整世界备份 runtime/test-backups/before-explosion-golem-20261007-181455（60文件），
 收据 logs/explosion-golem-grant-20261007.json。
 
-## 部署与继续工作
+## 历史记录：此前部署
 
 唯一项目 autorun：reframework/autorun/onimusha_loader.lua。
 四个 payload 在 reframework/data/onimusha_mc/scripts/：main/enemy_hit/guard_probe/combat_inventory。
@@ -76,7 +114,7 @@ DLL与主Lua本轮已更新，loader未改动，不需手工 Reset。
 fire bit=8（此前误4，4是sweep）已经修复。近战10米、projectile/fire/explosion/mob命中128米。
 上一轮弓箭远距离修复仍未独立实测；用户转向爆炸任务，不要宣称已通过。
 
-## 验证与剩余范围
+## 历史记录：此前验证与剩余范围
 
 Fabric build 通过，61 个 Java 测试通过（含3个新增寻路测试）；23 个 Lua 回归脚本全部通过。
 新增3个Java作用域测试覆盖嵌套爆炸、异常清理、未入队本地结算；Lua覆盖去重、旧会话/非法输入拒绝、
@@ -94,7 +132,7 @@ MC格挡无扣血并有声音已确认；红闪/击退/火花未逐项确认。
 项目 G:/Onimusha_MC_mod/source/SkyCraft，分支 onimusha-bridge，fork LCPD15/SkyCraft-OnimushaMC，未推送。
 源码、下载、编译和备份均在用户指定 MC 工作根；保存本地提交，禁止未经授权向外发送。
 
-## 当前文件指纹
+## 历史文件指纹（protocol12，不是当前部署）
 
 - DLL: `D60C30148D0CBEE6B1727483500EC9AF1D366C15C3E3170AF5CFA6CC66EFD57F`
 - JAR: `5A64BF0D97B2CB8CDD6534E33C642A3C601431C8CE42817B5B865EB07EBD43C7`

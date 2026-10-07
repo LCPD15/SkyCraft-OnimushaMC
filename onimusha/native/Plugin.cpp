@@ -195,17 +195,35 @@ void cache_collision(const proto::ColRegion& region,std::vector<proto::ColTri> t
         store.collisionTriangles.clear();store.collisionTriangles.reserve(total());for(const auto& [k,v]:collisionRegions)store.collisionTriangles.insert(store.collisionTriangles.end(),v.begin(),v.end());++store.collisionRevision;collisionReady=true;
 }
 int drain_solids(lua_State* L){std::scoped_lock lock(mutex);const auto count=std::min(store.solidChanges.size(),std::size_t(8192));lua_createtable(L,int(count),0);for(std::size_t i=0;i<count;i++){const auto& s=store.solidChanges[i];lua_createtable(L,0,4);nfield(L,"x",s.x);nfield(L,"y",s.y);nfield(L,"z",s.z);bfield(L,"solid",s.solid);lua_rawseti(L,-2,lua_Integer(i+1));}store.solidChanges.erase(store.solidChanges.begin(),store.solidChanges.begin()+count);return 1;}
+int snapshot_cubes(lua_State* L){
+    std::scoped_lock lock(mutex);double x{},y{},z{},radius{},limit{},epoch{};
+    if(!lua_istable(L,1)||!valid_number(L,1,"x",x)||!valid_number(L,1,"y",y)||!valid_number(L,1,"z",z)
+        ||!valid_number(L,1,"radius",radius)||!valid_number(L,1,"limit",limit)||!valid_number(L,1,"epoch",epoch)
+        ||radius<=0||radius>16||limit<1||limit>1280||limit!=std::floor(limit)
+        ||std::abs(x)>30'000'000||std::abs(y)>30'000'000||std::abs(z)>30'000'000||epoch!=host.collisionEpoch){lua_pushnil(L);return 1;}
+    const auto context=bridge.collision_status();
+    store.set_cube_context(host.worldId,host.collisionEpoch,context.mcPid,context.generation,context.connected);
+    const auto snapshot=store.nearby_cubes(x,y,z,radius,std::size_t(limit));
+    lua_createtable(L,0,9);bfield(L,"ready",store.cubeConnected&&store.cubeCleared);nfield(L,"epoch",store.cubeEpoch);
+    nfield(L,"world_id",store.cubeWorld);nfield(L,"mc_pid",store.cubePid);ifield(L,"generation",store.cubeGeneration);
+    ifield(L,"revision",store.cubeRevision);ifield(L,"total",snapshot.total);bfield(L,"truncated",snapshot.total>snapshot.rows.size());
+    lua_createtable(L,int(snapshot.rows.size()),0);int i=1;
+    for(const auto&p:snapshot.rows){lua_createtable(L,0,3);nfield(L,"x",p.x);nfield(L,"y",p.y);nfield(L,"z",p.z);lua_rawseti(L,-2,i++);}
+    lua_setfield(L,-2,"cubes");return 1;
+}
 int set_camera(lua_State* L){
     if(!lua_istable(L,1)){lua_pushboolean(L,false);return 1;}std::scoped_lock lock(mutex);CameraState c{};c.origin[0]=number(L,1,"origin_x");c.origin[1]=number(L,1,"origin_y");c.origin[2]=number(L,1,"origin_z");c.valid=boolean(L,1,"valid");lua_getfield(L,1,"view_proj");bool matrix=lua_istable(L,-1)&&lua_rawlen(L,-1)==16;if(matrix){for(int i=0;i<16;i++){lua_rawgeti(L,-1,i+1);int ok{};const double v=lua_tonumberx(L,-1,&ok);if(!ok||!std::isfinite(v))matrix=false;c.viewProj[i]=float(v);lua_pop(L,1);}}lua_pop(L,1);c.valid=c.valid&&matrix;camera=c;cameraReady=boolean(L,1,"binding_ready",c.valid);lua_pushboolean(L,cameraReady);return 1;
 }
 void on_lua(lua_State* L){
     const auto v=lua_version(L);if(v!=504){api->functions->log_error("OnimushaMC: incompatible Lua ABI %f",v);return;}
     static const luaL_Reg functions[]={{"submit_host",submit},{"tick_host",submit},{"read_mc",read_mc},{"get_mc_state",read_mc},{"drain_events",drain_events},{"poll_events",drain_events},{"set_enabled",set_enabled},{"send_hurt",send_hurt},{"status",status},{"publish_actors",publish_actors},{"publish_collision_tris",publish_tris},{"drain_solids",drain_solids},{"set_camera",set_camera},{nullptr,nullptr}};
-    luaL_newlib(L,functions);lua_setglobal(L,"onimusha_mc");api->functions->log_info("OnimushaMC: Lua bridge registered; takeover disabled until adapter passes bindings");
+    luaL_newlib(L,functions);lua_pushcfunction(L,snapshot_cubes);lua_setfield(L,-2,"snapshot_full_cubes");lua_setglobal(L,"onimusha_mc");api->functions->log_info("OnimushaMC: Lua bridge registered; takeover disabled until adapter passes bindings");
 }
 void on_lua_destroyed(lua_State*){std::scoped_lock lock(mutex);enabled=ready=collisionReady=cameraReady=false;bridge.invalidate_collision();release();host.flags=0;bridge.publish_host(host);}
 void on_present(){
-    std::scoped_lock lock(mutex);bridge.heartbeat();bridge.drain_render(store);bridge.overlay(overlay);bridge.world_entities(store.worldEntities);const bool have=bridge.read_mc(mc);
+    std::scoped_lock lock(mutex);bridge.heartbeat();
+    const auto context=bridge.collision_status();store.set_cube_context(host.worldId,host.collisionEpoch,context.mcPid,context.generation,context.connected);
+    bridge.drain_render(store);bridge.overlay(overlay);bridge.world_entities(store.worldEntities);const bool have=bridge.read_mc(mc);
     const bool inputReady=retry_pending_release();
     if(enabled&&bridge.alive())renderer::prepare();
     const bool takeover=have&&active();

@@ -32,13 +32,43 @@ bool mesh(Mesh& out,std::span<const std::uint8_t> p,std::size_t off,std::uint32_
 void RenderStore::clear() {
     for(const auto& [k,bits]:solids) for(int i=0;i<4096;i++) if(bits[i>>3]&(1u<<(i&7)))
         solidChanges.push_back({k.x*16+(i&15),k.y*16+(i>>8),k.z*16+((i>>4)&15),false});
-    sections.clear(); solids.clear(); avatar={}; scene={}; worldEntities={}; ++revision;
+    sections.clear(); solids.clear(); fullCubes.clear();++cubeRevision;
+    avatar={}; scene={}; worldEntities={}; ++revision;
+}
+void RenderStore::set_cube_context(std::uint32_t world,std::uint32_t epoch,std::uint32_t pid,std::uint64_t generation,bool connected) {
+    if(world!=cubeWorld||epoch!=cubeEpoch||pid!=cubePid||generation!=cubeGeneration||connected!=cubeConnected) {
+        fullCubes.clear();++cubeRevision;cubeCleared=false;
+    }
+    cubeWorld=world;cubeEpoch=epoch;cubePid=pid;cubeGeneration=generation;cubeConnected=connected;
+}
+CubeSnapshot RenderStore::nearby_cubes(double x,double y,double z,double radius,std::size_t limit) const {
+    CubeSnapshot result;
+    if(!cubeConnected||!cubeCleared||!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z)
+        ||std::abs(x)>30'000'000||std::abs(y)>30'000'000||std::abs(z)>30'000'000
+        ||!std::isfinite(radius)||radius<=0||radius>16||limit==0||limit>1280)return result;
+    struct Candidate {double distance;CubePosition p;};std::vector<Candidate> candidates;
+    for(const auto& [k,bits]:fullCubes) {
+        const double sx=double(k.x)*16,sy=double(k.y)*16,sz=double(k.z)*16;
+        if(sx>x+radius||sx+16<x-radius||sy>y+radius||sy+16<y-radius||sz>z+radius||sz+16<z-radius)continue;
+        for(int i=0;i<4096;i++)if(bits[i>>3]&(1u<<(i&7))) {
+            CubePosition p{k.x*16+(i&15),k.y*16+(i>>8),k.z*16+((i>>4)&15)};
+            const double dx=p.x+.5-x,dy=p.y+.5-y,dz=p.z+.5-z,d=dx*dx+dy*dy+dz*dz;
+            if(d<=radius*radius)candidates.push_back({d,p});
+        }
+    }
+    result.total=candidates.size();
+    const auto count=std::min(limit,candidates.size());
+    std::partial_sort(candidates.begin(),candidates.begin()+count,candidates.end(),[](const Candidate&a,const Candidate&b){
+        return std::tie(a.distance,a.p.x,a.p.y,a.p.z)<std::tie(b.distance,b.p.x,b.p.y,b.p.z);
+    });
+    for(std::size_t i=0;i<count;i++)result.rows.push_back(candidates[i].p);
+    return result;
 }
 bool RenderStore::consume(std::uint32_t type,std::span<const std::uint8_t> p) {
     const auto rev=++revision;
     bool ok=false;
     switch(type) {
-    case proto::kRenClearAll: if(p.empty()){clear();ok=true;} break;
+    case proto::kRenClearAll: if(p.empty()){clear();cubeCleared=cubeConnected;ok=true;} break;
     case proto::kRenAtlas: {
         proto::RenAtlas h; ok=read(p,h)&&texture(atlas,p,sizeof(h),h.width,h.height,rev); break;
     }
@@ -81,6 +111,20 @@ bool RenderStore::consume(std::uint32_t type,std::span<const std::uint8_t> p) {
         if(count!=h.count)break;
         for(int i=0;i<4096;i++){const bool a=(old[i>>3]&(1u<<(i&7)))!=0,b=(next[i>>3]&(1u<<(i&7)))!=0;if(a!=b)solidChanges.push_back({k.x*16+(i&15),k.y*16+(i>>8),k.z*16+((i>>4)&15),b});}
         if(h.count)solids[k]=next;else solids.erase(k);ok=true;break;
+    }
+    case proto::kRenFullCubes: {
+        proto::RenFullCubes h;
+        if(!read(p,h)||h.reserved||h.count>4096||p.size()!=sizeof(h)+(h.count?512:0)
+            ||std::abs(std::int64_t(h.sx))>1'000'000||std::abs(std::int64_t(h.sy))>1'000'000||std::abs(std::int64_t(h.sz))>1'000'000)break;
+        std::array<std::uint8_t,512> bits{};if(h.count)std::memcpy(bits.data(),p.data()+sizeof(h),512);
+        std::uint32_t count=0;for(auto b:bits)for(int i=0;i<8;i++)count+=(b>>i)&1u;
+        if(count!=h.count)break;
+        if(!cubeConnected||!cubeCleared||h.worldId!=cubeWorld||h.epoch!=cubeEpoch||h.mcPid!=cubePid) {
+            ++staleCubeMessages;ok=true;break;
+        }
+        const SectionKey key{h.sx,h.sy,h.sz};
+        if(h.count&&!fullCubes.contains(key)&&fullCubes.size()>=kMaxSections)break;
+        if(h.count)fullCubes[key]=bits;else fullCubes.erase(key);++cubeRevision;ok=true;break;
     }
     // Native terrain destruction intentionally unsupported: original terrain is protected.
     case proto::kRenDug: case proto::kRenRagdoll: case proto::kRenLights: ok=true;break;
