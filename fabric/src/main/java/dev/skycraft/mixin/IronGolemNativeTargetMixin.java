@@ -27,8 +27,9 @@ public abstract class IronGolemNativeTargetMixin extends AbstractGolem {
 			|| tickCount % 100 != 0 || skycraft$pathSamples >= 96) return;
 		skycraft$pathSamples++;
 		var path = getNavigation().getPath();
-		dev.skycraft.SkyCraft.LOG.info("Onimusha golem {} pos={} ground={} target={} path={} next={} done={}",
+		dev.skycraft.SkyCraft.LOG.info("Onimusha golem {} pos={} ground={} target={} path={} next={} done={} velocity={} below={} noAI={}",
 			getId(), position(), onGround(), getTarget() == null ? null : getTarget().getId(),
-			path == null ? 0 : path.getNodeCount(), path == null ? -1 : path.getNextNodeIndex(), getNavigation().isDone());
+			path == null ? 0 : path.getNodeCount(), path == null ? -1 : path.getNextNodeIndex(), getNavigation().isDone(),
+			getDeltaMovement(),level().getBlockState(blockPosition().below()),isNoAi());
 	}
 }

@@ -110,3 +110,7 @@ After reset, the user passed continuous movement, turning, jumping and traversal
 
 
 2026-10-07 通用受击修复：两套资产从当前玩家解析，无需每种敌人或重载后人工采样。用户两次确认原生受击效果及各类敌人正常扣血；实际 hooks 每击匹配，未叠加 direct HP。20个Lua回归脚本全部通过；后续远程距离分支专项16组通过。近处活动受击AABB及飞行敌人效果位置已实景执行，仍是聚合代理，不能标为精确部位攻击。自动重载首装后连续5次成功到generation6，无DLL/JAR更新。远程 HIT_PROJECTILE 旧10米限制修正已安装，验收结果另补，不提前判为通过。
+
+
+2026-10-07 铁傀儡寻路候选游戏失败后的修复：见 [Mob terrain](ONIMUSHA-MOB-TERRAIN.md)。
+实际隔离Fabric三项通过；鬼武者复杂地形和13/14区域边界仍待复测，不能视为已完成。

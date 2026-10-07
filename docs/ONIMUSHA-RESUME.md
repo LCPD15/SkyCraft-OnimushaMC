@@ -11,18 +11,23 @@ MC 爆炸桥接已实现。用户确认：“爆炸能正常影响敌人，也�
 来源 `logs/explosion-probe-20261007/tnt-first-live-*`，完整实现与限制见 ONIMUSHA-EXPLOSION.md。
 当前能力只标记油桶资源/工厂就绪，不把所有战斗边界当作通过。MC 爆炸强度暂不缩放原生范围/伤害。
 
-铁傀儡首轮用户结果：近处敌人能被攻击并扣血，但不移动。记录 golem-user-confirmed-*。
-根因：路径查询仍看虚空世界空气块，未读 SkyCollision 地形；已补 MC 路径类型/地面高度/
-目标表面扫描/稳定落脚点，新增3个Java测试，build成功。当前运行E176 JAR仍是旧寻路版本。
+铁傀儡近处攻击曾通过，但寻路候选799536游戏实测失败：生成掉地、拆块悬空、区域切换闪回。
+本次已改为服务器端Mob精确三角面碰撞、生成高度修正、未知地形暂停；详见 ONIMUSHA-MOB-TERRAIN.md。
+日志确认7次Stage transition来自连续区域13/14误拆成两套坐标；另1次为地形查询覆盖越界。
+已离线备份并迁移 area14 的一个有方块区块至area13，其他NBT逻辑与背包不变。
+别名文件 reframework/data/onimusha_mc_world_aliases.json 是当前存档专用，不能分发给未迁移存档。
 
-当前待用户回复：已请用户回安全位置、F10关闭并确认原角色恢复，保持游戏运行。
-用户确认安全后可按既有授权关闭准确验证路径的鬼武者进程，让 MC 保存退出；
-备份世界，再安装 fabric/build/libs 中的寻路候选。不重复发放测试道具。
-然后请用户重启进入场景，连接同一世界复测铁傀儡移动。不要重复提出已经挂起的问题。
+真实隔离MC/Fabric运行 smoke-b 三项通过：嵌入地面生成后落稳；删除真实垫块后下落到地面；
+从约8格外主动追击目标且原生模拟主机收到攻击。smoke-a中NoAI停了物理，已修正测试后重跑。
+61个Java单元测试、23个Lua回归通过。鬼武者内的同三项和边界行为仍待用户复测。
 
-当前游戏 PID 76224，MC PID 114676（操作前核实路径，不可仅用旧 PID）。
-MC 世界 OnimushaMC-XYZ-v2，启动 StartHidden/QuitWithHost/SwordBlocking。
-电脑自动输入保持停止，真实游戏操作由用户完成。Shell/文件/已授权进程管理可用。
+19:30 新JAR与Lua已安装并核对，DLL不变。安装记录 logs/golem-fall-stream-20261007-185910/installation.json。
+完整存档备份 runtime/test-backups/before-mob-ground-20261007-191302（62文件），包括旧JAR、Lua和映射。
+所有游戏/MC/测试主机均已正常退出。启动参数已恢复原世界 OnimushaMC-XYZ-v2、生产mapping和举剑格挡。
+
+当前已向用户提问：请重启鬼武者进入场景，F10保持关闭；等待其回复，勿重复提问。
+用户进场景后启动原MC世界（StartHidden/QuitWithHost/SwordBlocking），核对连接/地形和别名后再测试。
+不重复发道具；不删除/恢复旧测试世界。电脑自动输入继续停止，真实操作由用户完成。
 
 ## 本轮实现与道具
 
@@ -57,10 +62,10 @@ fire bit=8（此前误4，4是sweep）已经修复。近战10米、projectile/fi
 
 ## 验证与剩余范围
 
-Fabric build 通过，58 个 Java 测试通过；22 个 Lua 回归脚本全部通过。
+Fabric build 通过，61 个 Java 测试通过（含3个新增寻路测试）；23 个 Lua 回归脚本全部通过。
 新增3个Java作用域测试覆盖嵌套爆炸、异常清理、未入队本地结算；Lua覆盖去重、旧会话/非法输入拒绝、
 多个同时TNT、原生不确定结果不重试。真实 TNT/方块破坏已由用户确认。
-末地水晶、密集连锁、自伤精确去重、换场景资源独立加载、铁傀儡结果仍待覆盖。
+末地水晶、密集连锁、自伤精确去重、换场景资源独立加载、铁傀儡移动仍待覆盖；近处攻击已由用户确认通过。
 
 既有：MC普通/特殊两套全局攻击模板由当前玩家资产ID1/41解析，所有敌人共用，不要求逐敌/逐招采样。
 RSC活动受击范围聚合AABB，默认BODY部位；不能称已完成逐部位、装甲弱点或所有Boss阶段。
@@ -76,6 +81,6 @@ MC格挡无扣血并有声音已确认；红闪/击退/火花未逐项确认。
 ## 当前文件指纹
 
 - DLL: `5291E47D62D33D9ED8B7B95A9B285256C02E509D18115AAA0F6F104401F44931`
-- JAR: `E1763417CF84A215613BDB76FCB1E3E1E00E11E39833FA8B7D3CCE6D48D2FC62`
-- main Lua: `32CCAC46BDD0DB399EC63E9351AAED309B80B2ADC25326A66E10BADED55E6E39`
+- JAR: `5A64BF0D97B2CB8CDD6534E33C642A3C601431C8CE42817B5B865EB07EBD43C7`
+- main Lua: `FDC18992A51A620EA00197BB9E0002BD266A86693715517D4BDC226D11E89675`
 - enemy Lua: `7D0B6BB04D8A3DED75FE2FDE3110CBFF0F90B343190846EEC4EBB7B74C11F279`

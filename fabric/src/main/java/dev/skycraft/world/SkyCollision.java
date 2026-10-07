@@ -64,7 +64,16 @@ public final class SkyCollision {
 	}
 
 	public static boolean usesSmoothCollider(net.minecraft.world.entity.@Nullable Entity entity) {
-		return entity != null && smoothCollider.test(entity);
+		return entity != null && (smoothCollider.test(entity)
+			|| !entity.level().isClientSide() && NativeMobPhysics.managed(entity));
+	}
+
+	public static boolean knownBox(net.minecraft.world.phys.AABB b) {
+		for (int x = Math.floorDiv((int) Math.floor(b.minX), REGION_SIZE); x <= Math.floorDiv((int) Math.floor(b.maxX), REGION_SIZE); x++)
+			for (int y = Math.floorDiv((int) Math.floor(b.minY), REGION_SIZE); y <= Math.floorDiv((int) Math.floor(b.maxY), REGION_SIZE); y++)
+				for (int z = Math.floorDiv((int) Math.floor(b.minZ), REGION_SIZE); z <= Math.floorDiv((int) Math.floor(b.maxZ), REGION_SIZE); z++)
+					if (!KNOWN_REGIONS.contains(regionKey(x, y, z))) return false;
+		return true;
 	}
 
 	/** Adds every Skyrim triangle whose bounds overlap {@code box}. */

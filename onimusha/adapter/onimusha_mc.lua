@@ -51,6 +51,8 @@ local state = {
     teleport_seq=next_session_counter(session.teleport_seq), health_revision=1,
     health_bypass=0, health_remainder=0, actor_seq=0, actors={},
     tile_map=json.load_file("onimusha_mc_worlds.json") or {},
+    -- Written only after the offline world merger has preserved both old area tiles.
+    world_aliases=json.load_file("onimusha_mc_world_aliases.json") or {},
     world_key=nil, tile={x=0,z=0}, status="Waiting for native bridge", bindings={},
     collision=nil, collision_count=0, collision_ready=false, last_error=nil,
     blocks={}, solid_backlog={}, collider_probe=nil,
@@ -878,8 +880,22 @@ local function stage_key(s)
     -- Scene names are containers rather than verified stage IDs and are not used as fallback.
     return nil
 end
+local function canonical_world_key(key)
+    local target=type(state.world_aliases)=="table" and state.world_aliases[key]
+    if target==nil then return key end
+    -- Only verified continuous areas of the same stage may share coordinates.
+    local stage=type(key)=="string" and key:match("^stage:(%d+):area:%d+$")
+    local target_stage=type(target)=="string" and target:match("^stage:(%d+):area:%d+$")
+    if not stage or stage~=target_stage or not state.tile_map[target]
+        or (state.world_aliases[target] and state.world_aliases[target]~=target) then
+        error("Invalid/unmigrated continuous-area alias: "..tostring(key),0)
+    end
+    return target
+end
 local function choose_world(key)
     if not key then fail_open("Stage identity unresolved; block persistence held safely");return false end
+    state.observed_area_key=key
+    key=canonical_world_key(key)
     if key==state.world_key then return true end
     fail_open("Stage transition")
     state.host_camera_angles=nil
@@ -2268,7 +2284,8 @@ re.on_application_entry("LateUpdateBehavior",function()
             control_hooks_enabled=cfg.install_control_hooks,terrain_queries_enabled=cfg.enable_terrain_queries,
             native_block_colliders_enabled=cfg.enable_native_block_colliders,
             health_hook_tests_enabled=cfg.enable_health_hook_tests,
-            world=state.world_key or state.observed_world_key,epoch=state.epoch,collision_count=state.collision_count,
+            world=state.world_key or state.observed_world_key,observed_area=state.observed_area_key,
+            epoch=state.epoch,collision_count=state.collision_count,
             collision_refresh=collision_diagnostic(),not_ready_reason=state.not_ready_reason,
             control_transitions=state.control_diagnostic,control_gate=state.gate_snapshot,
             collision_unsupported=state.collision_unsupported,actor_count=state.actor_count,

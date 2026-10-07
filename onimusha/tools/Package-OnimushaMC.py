@@ -45,6 +45,7 @@ release = {
     'docs/ONIMUSHA-COMBAT-RESEARCH.md': repo / 'docs/ONIMUSHA-COMBAT-RESEARCH.md',
     'docs/ONIMUSHA-GUARD-RESEARCH.md': repo / 'docs/ONIMUSHA-GUARD-RESEARCH.md',
     'docs/ONIMUSHA-EXPLOSION.md': repo / 'docs/ONIMUSHA-EXPLOSION.md',
+    'docs/ONIMUSHA-MOB-TERRAIN.md': repo / 'docs/ONIMUSHA-MOB-TERRAIN.md',
     'docs/ONIMUSHA-HOT-RELOAD.md': repo / 'docs/ONIMUSHA-HOT-RELOAD.md',
     'docs/onimusha-bindings.md': repo / 'docs/onimusha-bindings.md',
     'docs/NATIVE_API.md': repo / 'onimusha/native/NATIVE_API.md',

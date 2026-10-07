@@ -273,4 +273,9 @@ public final class TriCollider {
 		double f = floor(tris, x, y, z, false, maxAbove);
 		return f == Double.NEGATIVE_INFINITY ? Double.NaN : f;
 	}
+
+	public static double walkableGroundAt(List<SkyTri> tris, double x, double y, double z, double maxAbove) {
+		double f = floor(tris, x, y, z, true, maxAbove);
+		return f == Double.NEGATIVE_INFINITY ? Double.NaN : f;
+	}
 }

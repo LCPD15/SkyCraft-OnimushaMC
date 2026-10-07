@@ -18,6 +18,8 @@
     "IronGolemNativeTargetMixin",
     "MinecraftServerFlightMixin",
     "NativePathfindingContextMixin",
+    "NativeMobTerrainMixin",
+    "NativeMobCollideMixin",
     "NativeWalkFloorMixin",
     "NativeGroundNavigationMixin",
     "NativeStableDestinationMixin",
