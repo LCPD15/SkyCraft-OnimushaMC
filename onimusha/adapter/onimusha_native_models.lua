@@ -5,6 +5,10 @@ local q={frame=0,instances={},holders={},warm_retired={},phase='disabled',create
 local pending={} -- host/model IDs never reused by the DLL during its lifetime
 local lights={}
 local dynamics={}
+-- Quarantined after 2026-10-08 Mesh.setMesh access violation during bulk
+-- dynamic-face preloading. Do not enable in a live game until the native
+-- resource lifetime and batched entity path have been independently verified.
+local DYNAMIC_NATIVE_ENABLED=false
 local function owned_count()
     local n=#q.warm_retired
     for _,b in pairs(q.instances)do if b.owner.owned_display then n=n+1 end end
@@ -28,6 +32,13 @@ local function key(p) return p.x..':'..p.y..':'..p.z end
 local function holder(rt,ht,path)
     local r=pin(sdk.create_resource(rt,path));local ok,h=pcall(function()return pin(r:create_holder(ht))end);r:release()
     if not ok then error(h) end;return h
+end
+local function refresh_holders(r)
+    local prefix='mod/onimusha_mc/sections/'..r.asset..'/'..r.asset
+    -- Reacquire holders for the existing hidden component. This path restored
+    -- blocks in game; the underlying cold-load failure is not yet explained.
+    r.mesh=holder('via.render.MeshResource','via.render.MeshResourceHolder',prefix..'.mesh')
+    r.material=holder('via.render.MeshMaterialResource','via.render.MeshMaterialResourceHolder',prefix..'.mdf2')
 end
 local function retire_warmer(r)
     if not r.go then return end
@@ -58,8 +69,14 @@ local function poll_resources()
             if call(r.warm_mesh,'get_MeshReady') and call(r.warm_mesh,'get_MaterialReady') then
                 assert(call(r.warm_mesh,'get_MaterialNum')==1,'Wrong preloaded material count')
                 r.ready=true;retire_warmer(r)
+            elseif not r.rebound and q.frame>=r.rebind_at and q.resource_allocated<2 then
+                q.resource_allocated=q.resource_allocated+1;r.rebound=true
+                call(r.warm_mesh,'set_Enabled',false)
+                refresh_holders(r)
+                call(r.warm_mesh,'setMesh',r.mesh);call(r.warm_mesh,'set_Material',r.material)
             elseif q.frame-r.start>600 then
                 r.attempts=(r.attempts or 0)+1;retire_warmer(r)
+                r.mesh=nil;r.material=nil
                 if r.attempts>=3 then r.error='Resource preload timeout after 3 attempts'
                 else r.retry_frame=q.frame+60 end
             end
@@ -105,25 +122,21 @@ local function resources(kind,c,p,priority)
     if not r then
         local row=assert(pending[kind].result,'Missing model result')
         local id=row.asset_id;assert(type(id)=='string' and #id==28 and id:match('^section_%x+$'),'Invalid resource ID')
-        local prefix='mod/onimusha_mc/sections/'..id..'/'..id
-        r={mesh=holder('via.render.MeshResource','via.render.MeshResourceHolder',prefix..'.mesh'),
-            material=holder('via.render.MeshMaterialResource','via.render.MeshMaterialResourceHolder',prefix..'.mdf2')}
-        r.kind=kind;r.asset=id
+        r={kind=kind,asset=id}
         q.holders[kind]=r
     end
+    if not r.mesh then refresh_holders(r) end
     -- A fresh hidden GO follows the proven render_section cold-load path. Attaching a
     -- cold resource directly to an already initialized collider GO can leave MeshReady false.
     -- This staging object is per KIND, never per placed block, and retires when ready.
     r.go=pin(sdk.find_type_definition('via.GameObject'):get_method('create(System.String, via.Folder)'):call(nil,'OMC_CubePreload_'..kind,c.folder))
     local pos=c.to_native(p.x+.5,p.y+.5,p.z+.5)
     call(r.go,'get_Transform'):set_position(Vector4f.new(pos.x,pos.y,pos.z,1),false)
-    r.start=q.frame;call(r.go,'set_DrawSelf',false)
+    r.start=q.frame;r.rebind_at=q.frame+30;r.rebound=false;call(r.go,'set_DrawSelf',false)
     r.warm_mesh=pin(call(r.go,'createComponent(System.Type)',sdk.find_type_definition('via.render.Mesh'):get_runtime_type()))
     call(r.warm_mesh,'set_Enabled',false);call(r.warm_mesh,'set_StaticMesh',false)
     call(r.warm_mesh,'setMesh',r.mesh);call(r.warm_mesh,'set_Material',r.material)
     call(r.warm_mesh,'set_RenderOutputID',31);call(r.warm_mesh,'set_DrawShadowCast',true)
-    -- Keep drawing hidden, but let the component initialize cold resources.
-    call(r.warm_mesh,'set_Enabled',true)
     return r
 end
 local function remove(k)
@@ -302,7 +315,7 @@ local function tick()
     for _,b in ipairs(show)do if not b.ready then call(b.mesh,'set_Enabled',true);call(b.owner.go,'set_DrawSelf',true);b.ready=true end end
     q.ready=#ready;q.desired=#s.cubes;q.phase=#ready==#s.cubes and 'synchronized' or 'loading';q.receipts=q.receipts+1
     if #ready==#s.cubes then q.waiting=nil end
-    if not q.dynamic_error then
+    if DYNAMIC_NATIVE_ENABLED and not q.dynamic_error then
         local ok,err=pcall(update_dynamic,c)
         if not ok then
             q.dynamic_error=tostring(err)
@@ -340,7 +353,7 @@ function api.status()
     end
     return{phase=q.phase,error=q.error,count=count,ready=q.ready or 0,desired=q.desired,created=q.created,removed=q.removed,
         receipts=q.receipts,waiting=q.waiting,resources_ready=resources_ready,resources_loading=resources_loading,lights=light_count,light_limit=64,
-        resource_errors=resource_errors,resource_diagnostics=diagnostics,pause=q.pause,foreground=q.foreground,worker=q.worker,light_error=q.light_error,dynamic_error=q.dynamic_error,dynamic_ready=q.dynamic_ready,dynamic_streams=q.dynamic_streams,owned_total=owned_count(),owned_limit=2560,warm_retiring=#q.warm_retired,limit=1280,radius=128,mode='automatic_models',live_conversion=true,shared_collision_objects=false,nonfull_display_only=true}
+        resource_errors=resource_errors,resource_diagnostics=diagnostics,pause=q.pause,foreground=q.foreground,worker=q.worker,light_error=q.light_error,dynamic_enabled=DYNAMIC_NATIVE_ENABLED,dynamic_disabled_reason=not DYNAMIC_NATIVE_ENABLED and "quarantined_after_setMesh_crash_20261008" or nil,dynamic_error=q.dynamic_error,dynamic_ready=q.dynamic_ready or 0,dynamic_streams=q.dynamic_streams,owned_total=owned_count(),owned_limit=2560,warm_retiring=#q.warm_retired,limit=1280,radius=128,mode='automatic_models',live_conversion=true,shared_collision_objects=false,nonfull_display_only=true}
 end
 _G.onimusha_native_sections=api
 re.on_application_entry('LateUpdateBehavior',function()

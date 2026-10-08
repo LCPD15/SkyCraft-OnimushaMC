@@ -6,10 +6,12 @@
 
 ## 安装状态
 
-20:41 已安装原生显示修正版，78项部署哈希核对通过，存档65文件已备份。
-此前用户确认自动方块与手持物的原生光照，但远距离、方块编辑闪回和F5身体仍有问题。
-新范围/显示保留/分批加载已完成本地验证，**等待本轮实景复测，不能视为已全部通过**。
-安装回执：`G:/Onimusha_MC_mod/logs/native-lighting-repair-20261008/install.json`。
+21:32 已安装崩溃后的恢复候选：保留自动方块绘制，**暂停玩家、手持物、NPC、活动 TNT 的原生绘制**。
+21:16 隐藏组件重建实验导致严重卡顿及 `Mesh.setMesh` 后原生访问异常；已撤回该实验，
+恢复此前用户确认方块正常的同组件 holder 绑定路径，冷启动稳定性仍待确认。
+78项部署哈希核对通过，当前存档65文件已备份且未改动。
+恢复回执：`G:/Onimusha_MC_mod/logs/native-lighting-crash-20261008-211723/recovery-install.json`。
+此前128米显示和放拆保留改动仍待实景验收，不能视为已全部通过。
 
 ## 自动转换怎样工作
 
@@ -31,6 +33,11 @@ MESH/MDF/TEX。相同外观共用原生资源，新增同类方块只创建实�
 非完整方块对鬼武者角色的精确碰撞尚未新增。
 
 ## 玩家、手持物、NPC
+
+**当前生产版本隔离此功能（`DYNAMIC_NATIVE_ENABLED=false`）。以下描述仅是尚未稳定的实验实现。**
+动态对象统一回退 MC 渲染，所以不会获得鬼武者光照/遮挡。战斗、实体寻路和爆炸伤害桥接仍保留。
+逐面资源加载曾造成大量排队；重建加载组件的修补发生真实游戏崩溃。必须先解决资源生命周期和
+批量绘制，再恢复此功能。离线 mock 通过不能证明原生引擎安全。
 
 实际 MC 玩家、装备和铁傀儡等实体的可支持矩形面转换为共享资源，动画仅更新原生实例变换。
 同一面移动时不重复导出文件。玩家、场景实体、第一人称手持物各最多 512 面。
@@ -102,11 +109,15 @@ light_error，以及 `hooks.camera_dither` 的调用/抑制计数。资源缓存
 
 This Onimusha-only protocol-15 candidate automatically captures actual Minecraft model appearances and
 converts supported opaque/cutout geometry into cached native resources. Identical appearances reuse assets;
-blocks, animated entity faces, and first-person held items switch ownership only after native readiness.
+blocks switch ownership only after native readiness. Native entity and held-item rendering is currently
+quarantined after a Mesh.setMesh access violation; these streams use Minecraft rendering until a safer
+resource-lifetime and batching design is validated. Combat and explosion bridging remain enabled.
 It also adds bounded native point lights, chat input, player/enemy contact handling and an experimental
 near-camera fade override. The existing real Minecraft armor path has been verified with isolated damage tests.
 Inventory supplies and legal maximum Unbreaking/Infinity enchantments have been applied to the backed-up save.
 
-Installation and automated tests passed; in-game acceptance is still pending. Animated/translucent surfaces
+The component-recreation experiment crashed in game and has been withdrawn. The block-only recovery
+candidate is installed and its deployment hashes and offline isolation checks passed; a new in-game
+startup/acceptance check is still pending. Animated/translucent surfaces
 remain Minecraft-rendered, partial-block native collision and native AI navigation are not added, and dense
 builds/multiple NPCs still require performance testing. Previous navigation experiments remain disabled.

@@ -32,7 +32,10 @@ ctx.bridge.snapshot_native_dynamic=function()return dynamic end
 dynamic_rows={};dynamic_ack_ok=true
 ctx.bridge.ack_native_dynamic=function(a)dynamic_rows[a.hands and 'hands' or (a.avatar and 'avatar' or 'scene')]=a.faces;return dynamic_ack_ok end
 ''')
-lua.execute((Path(__file__).resolve().parents[1]/'onimusha_native_models.lua').read_text(encoding='utf-8'))
+# OFFLINE MOCK ONLY: preserve coverage for quarantined code, never deploy this override.
+module=(Path(__file__).resolve().parents[1]/'onimusha_native_models.lua').read_text(encoding='utf-8')
+assert 'local DYNAMIC_NATIVE_ENABLED=false' in module
+lua.execute(module.replace('local DYNAMIC_NATIVE_ENABLED=false', 'local DYNAMIC_NATIVE_ENABLED=true', 1))
 lua.execute(r'''
 advance(30);loaded=true;advance(20)
 assert(onimusha_native_sections.status().dynamic_ready==1 and #dynamic_rows.avatar==1)

@@ -25,7 +25,7 @@ end
 lua.execute((Path(__file__).resolve().parents[1]/'onimusha_native_models.lua').read_text(encoding='utf-8'))
 lua.execute(r'''
 advance(30);assert(captures==1 and #ack_rows==0 and created==1)
-assert(not objects[1].draw and objects[1].enabled)
+assert(not objects[1].draw and not objects[1].enabled)
 loaded=true;advance(15);assert(#ack_rows==2 and created==3 and destroyed==1)
 assert(objects[2].p.x==-8.5 and objects[2].p.y==-17.5 and objects[2].p.z==-26.5)
 print('PASS unknown model IDs auto-capture once; nonfull models get owned display at calibrated block center')

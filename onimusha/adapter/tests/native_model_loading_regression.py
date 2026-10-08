@@ -21,7 +21,7 @@ lua.execute((Path(__file__).resolve().parents[1]/'onimusha_native_models.lua').r
 lua.execute(r'''
 advance(90)
 assert(onimusha_native_sections.status().resources_loading==8 and created==8)
-for _,b in ipairs(objects)do assert(b.enabled and not b.draw)end
+for _,b in ipairs(objects)do assert(not b.enabled and not b.draw)end
 paused=true;advance(700)
 assert(created==8 and destroyed==0 and next(onimusha_native_sections.status().resource_errors)==nil)
 paused=false;sample.foreground=false;advance(700)
