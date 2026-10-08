@@ -79,6 +79,12 @@ for _,b in ipairs(objects)do assert(b.name~='OMC_Dynamic_hands:12') end
 dynamic.hands={};advance(15)
 assert(not hand.draw and #dynamic_rows.hands==0 and not onimusha_native_sections.busy())
 print('PASS transparent hand faces consume no GameObject, and F5 restores hands ownership')
+dynamic.avatar={{first=0,kind=101,x=5,y=6,z=7,qw=1,qx=0,qy=0,qz=0,sx=.5,sy=1}}
+local before=captures;advance(3)
+assert(#dynamic_rows.avatar==1 and onimusha_native_sections.status().dynamic_streams.avatar.ready==1)
+dynamic.avatar={};dynamic.hands={{first=0,kind=101,x=1,y=2,z=3,qw=1,qx=0,qy=0,qz=0,sx=.2,sy=.4}};advance(15)
+assert(#dynamic_rows.avatar==0 and #dynamic_rows.hands==1 and captures==before)
+print('PASS F5 body/hands switch has independent receipts and reuses loaded appearances')
 sample.lights={{x=4,y=5,z=6,color=0xff9933,level=15}};advance(2)
 onimusha_native_sections.stop();advance(15,false);assert(not onimusha_native_sections.busy())
 callbacks.reset();assert(onimusha_native_sections==nil)

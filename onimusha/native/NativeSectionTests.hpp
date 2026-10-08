@@ -34,6 +34,13 @@ template<class Check>void native_section_tests(Check check){
     check(s.accept_instances(cubes,400)&&s.section_overlay(k,s.sections[k],401).vertices.empty(),"ready prebuilt cube suppresses source geometry with depth retained");
     const auto receipt=s.nativeViews[k].remainder.revision;
     s.accept_instances(cubes,450);check(s.nativeViews[k].remainder.revision==receipt,"unchanged instance set only renews lease, no GPU mesh rebuild");
+    const auto deadline=s.nativeViews[k].expires;
+    auto added=v;for(auto&x:added){x.x+=1;x.flags+=256;}
+    v.insert(v.begin(),added.begin(),added.end());send();
+    check(s.section_overlay(k,s.sections[k],451).vertices.size()==3&&s.nativeViews[k].mask==std::vector<std::uint8_t>{2},"adding a block and reordering triangles keeps existing native block hidden in MC without another acknowledgement");
+    check(s.nativeViews[k].expires==deadline&&s.section_overlay(k,s.sections[k],deadline).vertices.size()==6,"edit preserves old native lease deadline, never extends an unrenewed receipt");
+    v.erase(v.begin(),v.begin()+3);send();
+    check(s.section_overlay(k,s.sections[k],452).vertices.empty(),"breaking the new block keeps unchanged native block suppressed");
     const auto oldKind=cubes[0].kind;for(auto&x:v)x.u+=.3f;send();s.accept_instances(cubes,460);
     check(s.nativeViews.empty(),"replacing stone with iron cannot reuse old stone visibility receipt");
     cubes=s.nearby_instances(.5,.5,.5);check(cubes.size()==1&&cubes[0].kind!=oldKind&&s.accept_instances(cubes,470),"new kind becomes native only after its own ready instance acknowledgement");
@@ -42,7 +49,9 @@ template<class Check>void native_section_tests(Check check){
     auto thin=s.nearby_instances(.5,.5,.5)[0].kind;send();check(s.nearby_instances(.5,.5,.5)[0].kind==thin,"unchanged full appearance survives neighbor section rebuild without new model ID");
     for(auto&x:v){x.x+=1;x.flags+=256;}send();check(s.nearby_instances(1.5,.5,.5)[0].kind==thin,"same appearance at another cell shares model ID");
     v.assign(std::begin(tagged),std::end(tagged));s.consume(proto::kRenSection,packet(proto::RenSection{-1,2,-3,3},v));
-    cubes=s.nearby_instances(-15.5,32.5,-47.5);check(cubes.size()==1&&cubes[0].x==-16&&cubes[0].y==32&&cubes[0].z==-48,"negative/distant section offsets preserve native cube placement");
+    cubes=s.nearby_instances(-15.5,32.5,-47.5);check(cubes.size()==2&&cubes[0].x==-16&&cubes[0].y==32&&cubes[0].z==-48,"negative/distant section offsets preserve native cube placement");
+    cubes=s.nearby_instances(40.5,.5,.5);check(cubes.size()==2,"native display stays available beyond old 16m collision radius");
+    check(s.nearby_instances(200,.5,.5).empty(),"native display range is bounded to 128m");
     check(!s.accept_instances(std::vector<NativeCube>(1281,{0,0,0,1}),500),"instance receipt enforces the 1280 bound");
 }
 }

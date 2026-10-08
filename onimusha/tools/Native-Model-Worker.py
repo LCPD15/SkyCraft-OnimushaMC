@@ -17,8 +17,7 @@ from types import SimpleNamespace
 sys.path.insert(0,str(Path(__file__).parent))
 from native_model_input import convert_model
 
-def atomic_json(path, data):
-    tmp=path.with_suffix('.tmp');tmp.write_text(json.dumps(data,ensure_ascii=False),encoding='utf-8');os.replace(tmp,path)
+from native_worker_io import atomic_json,completed_result,queued_requests
 
 def main():
     ap=argparse.ArgumentParser()
@@ -41,16 +40,41 @@ def main():
     opts=SimpleNamespace(addon=a.addon,material_template=template/'mc_stone_cube.mdf2.51',
         tex_template=template/'mc_stone_ALBD.tex.251111100',out=a.out,source_kind='runtime-capture',texel_scale=4)
     builder.initialize(opts)
-    done=set();started=time.time();built=0
+    done=set();unpublished={};metadata={};started=time.time();built=0;last_heartbeat=0
+    known_assets={p.name for p in a.out.glob('section_*') if p.is_dir()} if a.out.exists() else set()
+    cache_bytes=sum(p.stat().st_size for p in a.out.glob('section_*/*') if p.is_file()) if a.out.exists() else 0
+    def heartbeat():
+        nonlocal last_heartbeat
+        if time.monotonic()-last_heartbeat<1:return
+        last_heartbeat=time.monotonic()
+        atomic_json(root/'worker.json',dict(host_pid=a.host_pid,pid=os.getpid(),state='ready',jobs=len(done),built=built,
+            publishing=len(unpublished),alive_at=time.time(),started=started))
+    def publish(job,result):
+        if not atomic_json(job/'result.json',result):
+            unpublished[job.name]=result;return
+        unpublished.pop(job.name,None);done.add(job.name)
+        p=job/'section.bin'
+        try:p.unlink(missing_ok=True)
+        except PermissionError:pass
+        print(json.dumps(result,ensure_ascii=False),flush=True)
     while k.WaitForSingleObject(handle,0)==258:
-        atomic_json(root/'worker.json',dict(host_pid=a.host_pid,pid=os.getpid(),state='ready',jobs=len(done),built=built,alive_at=time.time(),started=started))
-        for path in sorted(root.glob(str(a.host_pid)+'_*_*/request.json'),key=lambda p:p.parent.name):
+        heartbeat()
+        processed=0
+        for path in queued_requests(root,a.host_pid,done,metadata):
+            if k.WaitForSingleObject(handle,0)!=258:break
             if path.parent.name in done:continue
-            job=path.parent;done.add(job.name)
+            heartbeat();job=path.parent
+            if job.name in unpublished:
+                publish(job,unpublished[job.name]);continue
+            if processed>=4:break  # discover newly placed blocks before draining old entity faces
             result=dict(id=job.name,ok=False)
             try:
                 assert re.fullmatch(r'\d+_\d+_\d+',job.name) and len(done)<=8192
                 req=json.loads(path.read_text(encoding='utf-8'));assert req['id']==job.name and req['host_pid']==a.host_pid
+                if completed_result(job,req) is not None:
+                    done.add(job.name);continue
+                processed+=1
+                result.update(model=req['model'],world=req['world'],epoch=req['epoch'],mc_pid=req['mc_pid'],generation=req['generation'])
                 raw=(job/'section.bin').read_bytes()
                 assert re.fullmatch(r'atlas_\d+_\d+_\d+_\d+\.bin',req['atlas'])
                 atlas=(root/req['atlas']).read_bytes()
@@ -64,10 +88,11 @@ def main():
                     opts.section=job/'compact-section.bin';opts.atlas=job/'compact-atlas.bin'
                     opts.section.write_bytes(section);opts.atlas.write_bytes(compact)
                     # Bound accumulated immutable resources; no overwrite of potentially cached assets.
-                    cache_bytes=sum(p.stat().st_size for p in a.out.glob('section_*/*') if p.is_file()) if a.out.exists() else 0
                     assert cache_bytes<1024**3,'Native section resource cache reached 1 GiB; overlay retained'
                     report=builder.build(opts);stem=Path(report['mesh_path']).stem
                     assert re.fullmatch('section_[a-f0-9]{20}',stem)
+                    if stem not in known_assets:
+                        cache_bytes+=sum(p.stat().st_size for p in (a.out/stem).iterdir() if p.is_file());known_assets.add(stem)
                     dst=a.game/'natives/stm/mod/onimusha_mc/sections'/stem;dst.mkdir(parents=True,exist_ok=True)
                     for name,sha in report['files'].items():
                         src=a.out/stem/name;data=src.read_bytes();assert hashlib.sha256(data).hexdigest()==sha
@@ -81,13 +106,8 @@ def main():
                 if str(e)=='fully_transparent_model':result.update(ok=True,empty=True)
                 else:result['error']=str(e);print('Native model failed: '+str(e),flush=True)
             # Result is the readiness fence, after every asset is completely written.
-            atomic_json(job/'result.json',result)
-            # Keep metadata/compact inputs for diagnosis, not a 20+ MiB atlas per edit.
-            for name in ('section.bin',):
-                p=job/name
-                if p.is_file():p.unlink()
-            print(json.dumps(result,ensure_ascii=False),flush=True)
-        time.sleep(.25)
+            publish(job,result)
+        time.sleep(.05 if processed else .25)
     atomic_json(root/'worker.json',dict(host_pid=a.host_pid,pid=os.getpid(),state='host_exited',jobs=len(done),built=built))
     k.CloseHandle(handle)
 

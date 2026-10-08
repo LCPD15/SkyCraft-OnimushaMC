@@ -15,6 +15,15 @@ local function owned_count()
 end
 local function call(o,n,...) assert(o,n);return o:call(n,...) end
 local function pin(o) return assert(o):add_ref() end
+local function optional(o,n)
+    local ok,value=pcall(call,o,n);if ok then return value end;return tostring(value)
+end
+local function read_json(path)
+    -- REFramework logs an error for every missing JSON; requests intentionally
+    -- have no result until the background worker publishes one.
+    if fs and fs.read and fs.read(path)=='' then return nil end
+    return json.load_file(path)
+end
 local function key(p) return p.x..':'..p.y..':'..p.z end
 local function holder(rt,ht,path)
     local r=pin(sdk.create_resource(rt,path));local ok,h=pcall(function()return pin(r:create_holder(ht))end);r:release()
@@ -31,38 +40,51 @@ local function retire_warmer(r)
     r.go=nil;r.warm_mesh=nil
 end
 local function poll_resources()
+    local pause=sdk.get_managed_singleton and sdk.get_managed_singleton('app.PauseManager')
+    q.pause={menu=pause and optional(pause,'get_IsMenuPause'),player=pause and optional(pause,'get_IsPlayerPause')}
     for i=#q.warm_retired,1,-1 do
         local b=q.warm_retired[i]
         if q.frame-b.frame>10 and not call(b.go,'get_Valid') then table.remove(q.warm_retired,i) end
     end
     for _,r in pairs(q.holders) do
         if r.go then
+            if q.frame%60==0 then
+                r.diagnostic={model=r.kind,asset=r.asset,age_frames=q.frame-r.start,mesh_ready=optional(r.warm_mesh,'get_MeshReady'),
+                    material_ready=optional(r.warm_mesh,'get_MaterialReady'),materials=optional(r.warm_mesh,'get_MaterialNum'),
+                    enabled=optional(r.warm_mesh,'get_Enabled'),draw=optional(r.go,'get_Draw'),update=optional(r.go,'get_Update'),
+                    folder=optional(call(r.go,'get_Folder'),'get_Path')}
+            end
+            if q.pause.menu==true or q.pause.player==true or q.foreground==false then r.start=r.start+1 end
             if call(r.warm_mesh,'get_MeshReady') and call(r.warm_mesh,'get_MaterialReady') then
                 assert(call(r.warm_mesh,'get_MaterialNum')==1,'Wrong preloaded material count')
                 r.ready=true;retire_warmer(r)
             elseif q.frame-r.start>600 then
-                r.error='Resource preload timeout';retire_warmer(r)
+                r.attempts=(r.attempts or 0)+1;retire_warmer(r)
+                if r.attempts>=3 then r.error='Resource preload timeout after 3 attempts'
+                else r.retry_frame=q.frame+60 end
             end
         end
     end
 end
-local function resources(kind,c,p)
+local function resources(kind,c,p,priority)
     -- The DLL Lua API supplies doubles (2.0), while JSON object keys are "2".
     kind=assert(math.tointeger(kind),'Invalid cube kind');assert(kind>=1 and kind<=0xffffffff,'Invalid model ID')
     local r=q.holders[kind]
     if r and (r.ready or r.go or r.error) then return r end
+    if r and r.retry_frame and q.frame<r.retry_frame then return nil end
     if not r then
         local job=pending[kind]
         if not job then
-            local worker=json.load_file('onimusha_mc/native_models/worker.json')
+            local worker=read_json('onimusha_mc/native_models/worker.json')
+            q.worker=worker
             if not worker or worker.host_pid~=c.host_pid or worker.state~='ready' or math.abs(os.time()-worker.alive_at)>30 then return nil end
             if q.frame%3~=0 then return nil end
-            local id=c.bridge.capture_native_model({model=kind,epoch=c.epoch})
+            local id=c.bridge.capture_native_model({model=kind,epoch=c.epoch,priority=priority or 0})
             if id then pending[kind]={id=id,epoch=c.epoch,world=c.world_id,mc_pid=c.mc_pid,generation=c.generation} end
             return nil
         end
         if not job.result and q.frame%15==0 then
-            local value=json.load_file('onimusha_mc/native_models/'..job.id..'/result.json')
+            local value=read_json('onimusha_mc/native_models/'..job.id..'/result.json')
             if value then
                 assert(value.id==job.id and value.model==kind and value.epoch==job.epoch and value.world==job.world and value.mc_pid==job.mc_pid and value.generation==job.generation,'Stale model result')
                 job.result=value
@@ -77,6 +99,8 @@ local function resources(kind,c,p)
         end
     end
     if q.resource_allocated>=2 or owned_count()>=2560 then return nil end
+    local loading=0;for _,value in pairs(q.holders)do if value.go then loading=loading+1 end end
+    if loading>=8 then return nil end
     q.resource_allocated=q.resource_allocated+1
     if not r then
         local row=assert(pending[kind].result,'Missing model result')
@@ -84,6 +108,7 @@ local function resources(kind,c,p)
         local prefix='mod/onimusha_mc/sections/'..id..'/'..id
         r={mesh=holder('via.render.MeshResource','via.render.MeshResourceHolder',prefix..'.mesh'),
             material=holder('via.render.MeshMaterialResource','via.render.MeshMaterialResourceHolder',prefix..'.mdf2')}
+        r.kind=kind;r.asset=id
         q.holders[kind]=r
     end
     -- A fresh hidden GO follows the proven render_section cold-load path. Attaching a
@@ -97,6 +122,8 @@ local function resources(kind,c,p)
     call(r.warm_mesh,'set_Enabled',false);call(r.warm_mesh,'set_StaticMesh',false)
     call(r.warm_mesh,'setMesh',r.mesh);call(r.warm_mesh,'set_Material',r.material)
     call(r.warm_mesh,'set_RenderOutputID',31);call(r.warm_mesh,'set_DrawShadowCast',true)
+    -- Keep drawing hidden, but let the component initialize cold resources.
+    call(r.warm_mesh,'set_Enabled',true)
     return r
 end
 local function remove(k)
@@ -114,7 +141,7 @@ local function clear(reason)
     for _,r in pairs(lights)do retire_warmer(r)end;lights={}
     for _,r in pairs(dynamics)do retire_warmer(r)end;dynamics={}
     if q.context then q.context.bridge.release_section() end
-    q.context=nil;q.phase=reason or 'disabled';q.ready=0
+    q.context=nil;q.phase=reason or 'disabled';q.ready=0;q.dynamic_streams={}
 end
 local function update_lights(s,c)
     assert(type(s.lights or {})=='table' and #(s.lights or {})<=64,'Light bound exceeded')
@@ -161,12 +188,13 @@ local function update_dynamic(c)
     for k,r in pairs(dynamics)do
         if not wanted[k] or wanted[k].kind~=r.kind then retire_warmer(r);dynamics[k]=nil end
     end
-    local made=0;local count=0
+    local made=0;local count=0;q.dynamic_streams={}
     for _,stream in ipairs({'avatar','scene','hands'})do
-        local receipts={};local show={}
+        local receipts={};local show={};local errors={}
         for _,p in ipairs(s[stream])do
             local k=stream..':'..p.first;local r=dynamics[k]
-            local asset=resources(p.kind,c,p)
+            local asset=resources(p.kind,c,p,1)
+            if asset and asset.error then errors[tostring(p.kind)]=asset.error end
             if not r and asset and asset.ready and not asset.empty and made<8 and owned_count()<2560 then
                 r={kind=p.kind};dynamics[k]=r;made=made+1
                 r.go=pin(sdk.find_type_definition('via.GameObject'):get_method('create(System.String, via.Folder)'):call(nil,'OMC_Dynamic_'..k,c.folder))
@@ -191,6 +219,7 @@ local function update_dynamic(c)
             end
         end
         local complete=stream~='hands' or (s.hands_complete and #receipts==#s.hands)
+        q.dynamic_streams[stream]={desired=#s[stream],ready=#receipts,errors=errors,complete=complete}
         if c.bridge.ack_native_dynamic({epoch=c.epoch,avatar=stream=='avatar',hands=stream=='hands',faces=complete and receipts or {}}) and complete then
             for _,r in ipairs(show)do call(r.warm_mesh,'set_Enabled',true);call(r.go,'set_DrawSelf',true);count=count+1 end
         else
@@ -201,7 +230,7 @@ local function update_dynamic(c)
     q.dynamic_ready=count
 end
 local function attach(owner,p,r)
-    -- Owner retains the Mesh through deferred destruction; never destroy its GameObject here.
+    -- Display ownership is independent of the short-range collision GameObject.
     -- Match the game-tested prefab + Mesh initialization order before enabling drawing.
     call(owner.go,'set_DrawSelf',false)
     if not owner.display_mesh then
@@ -220,7 +249,7 @@ local function tick()
     local s=c.bridge.snapshot_native_instances()
     if not s or not s.ready or s.epoch~=c.epoch or s.world_id~=c.world_id or s.mc_pid~=c.mc_pid or s.generation~=c.generation then clear('waiting_snapshot');return end
     assert(type(s.cubes)=='table' and #s.cubes<=1280,'Invalid instance snapshot')
-    c.host_pid=s.host_pid
+    c.host_pid=s.host_pid;q.foreground=s.foreground
     -- A missing light binding must not revoke otherwise valid block drawing.
     if not q.light_error then
         local ok,err=pcall(update_lights,s,c)
@@ -230,20 +259,18 @@ local function tick()
         end
     end
     local desired={};for _,p in ipairs(s.cubes)do desired[key(p)]=p end
-    local blocks=assert(_G.onimusha_native_blocks,'Collision owner unavailable')
     local removed={}
     for k,b in pairs(q.instances)do
-        local p=desired[k];local owner=p and blocks.display_owner(p.x,p.y,p.z)
-        if b.owner.owned_display and not owner and call(b.owner.go,'get_Valid') then owner=b.owner end
-        if not p or p.kind~=b.p.kind or owner~=b.owner then removed[#removed+1]=k end
+        local p=desired[k]
+        if not p or p.kind~=b.p.kind or not call(b.owner.go,'get_Valid') then removed[#removed+1]=k end
     end
     for _,k in ipairs(removed)do remove(k)end
     local allocated=0
     for _,p in ipairs(s.cubes)do
         if not q.instances[key(p)]then
             local r=resources(p.kind,c,p)
-            local owner=blocks.display_owner(p.x,p.y,p.z)
-            if r and r.ready and not r.empty and not owner and owned_count()<2560 then
+            local owner
+            if r and r.ready and not r.empty and owned_count()<2560 then
                 local go=pin(sdk.find_type_definition('via.GameObject'):get_method('create(System.String, via.Folder)'):call(nil,'OMC_Model_'..key(p),c.folder))
                 local pos=c.to_native(p.x+.5,p.y+.5,p.z+.5)
                 call(go,'get_Transform'):set_position(Vector4f.new(pos.x,pos.y,pos.z,1),false)
@@ -304,14 +331,16 @@ function api.status()
     local count=0;for _ in pairs(q.instances)do count=count+1 end
     local light_count=0;for _ in pairs(lights)do light_count=light_count+1 end
     local resources_ready,resources_loading,resource_errors=0,0,{}
+    local diagnostics={}
     for kind,r in pairs(q.holders) do
         if r.ready then resources_ready=resources_ready+1 end
         if r.go then resources_loading=resources_loading+1 end
         if r.error then resource_errors[tostring(kind)]=r.error end
+        if r.diagnostic and #diagnostics<24 then diagnostics[#diagnostics+1]=r.diagnostic end
     end
     return{phase=q.phase,error=q.error,count=count,ready=q.ready or 0,desired=q.desired,created=q.created,removed=q.removed,
         receipts=q.receipts,waiting=q.waiting,resources_ready=resources_ready,resources_loading=resources_loading,lights=light_count,light_limit=64,
-        resource_errors=resource_errors,light_error=q.light_error,dynamic_error=q.dynamic_error,dynamic_ready=q.dynamic_ready,owned_total=owned_count(),owned_limit=2560,warm_retiring=#q.warm_retired,limit=1280,radius=16,mode='automatic_models',live_conversion=true,shared_collision_objects=true,nonfull_display_only=true}
+        resource_errors=resource_errors,resource_diagnostics=diagnostics,pause=q.pause,foreground=q.foreground,worker=q.worker,light_error=q.light_error,dynamic_error=q.dynamic_error,dynamic_ready=q.dynamic_ready,dynamic_streams=q.dynamic_streams,owned_total=owned_count(),owned_limit=2560,warm_retiring=#q.warm_retired,limit=1280,radius=128,mode='automatic_models',live_conversion=true,shared_collision_objects=false,nonfull_display_only=true}
 end
 _G.onimusha_native_sections=api
 re.on_application_entry('LateUpdateBehavior',function()

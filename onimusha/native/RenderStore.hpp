@@ -89,6 +89,7 @@ struct RenderStore {
     void invalidate_native_views();
     std::vector<NativeCube> nearby_instances(double x,double y,double z) const;
     bool accept_instances(const std::vector<NativeCube>& cubes,std::uint64_t now);
+    void remap_instance_section(SectionKey key,std::uint64_t expires);
     void register_models(Mesh& mesh,SectionKey key);
     std::uint32_t register_model(Mesh model,std::uint32_t textureId);
     const Texture* model_texture(std::uint32_t model)const;

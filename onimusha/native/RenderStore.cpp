@@ -97,8 +97,9 @@ std::vector<NativeCube> RenderStore::nearby_instances(double x,double y,double z
     std::set<NativeCube>unique;
     if(!cubeConnected||!cubeCleared)return {};
     for(const auto&[k,m]:sections){
-        if(std::abs(k.x*16+8.-x)>24||std::abs(k.y*16+8.-y)>24||std::abs(k.z*16+8.-z)>24)continue;
-        for(const auto&p:m.nativeTriangles)if(p.kind){const double dx=p.x+.5-x,dy=p.y+.5-y,dz=p.z+.5-z;if(dx*dx+dy*dy+dz*dz<=256)unique.insert(p);}
+        // Display follows the loaded MC view, independently of nearby physics.
+        if(std::abs(k.x*16+8.-x)>136||std::abs(k.y*16+8.-y)>136||std::abs(k.z*16+8.-z)>136)continue;
+        for(const auto&p:m.nativeTriangles)if(p.kind){const double dx=p.x+.5-x,dy=p.y+.5-y,dz=p.z+.5-z;if(dx*dx+dy*dy+dz*dz<=128.*128.)unique.insert(p);}
     }
     std::vector<NativeCube>rows(unique.begin(),unique.end());auto distance=[&](auto p){double dx=p.x+.5-x,dy=p.y+.5-y,dz=p.z+.5-z;return dx*dx+dy*dy+dz*dz;};
     std::sort(rows.begin(),rows.end(),[&](auto a,auto b){auto da=distance(a),db=distance(b);return da==db?a<b:da<db;});if(rows.size()>1280)rows.resize(1280);return rows;
@@ -120,6 +121,16 @@ bool RenderStore::accept_instances(const std::vector<NativeCube>&rows,std::uint6
 const Mesh& RenderStore::section_overlay(SectionKey key,const Mesh& original,std::uint64_t now) const {
     auto it=nativeViews.find(key);if(it==nativeViews.end()||it->second.sourceRevision!=original.nativeRevision||now>=it->second.expires)return original;
     return it->second.remainder;
+}
+void RenderStore::remap_instance_section(SectionKey key,std::uint64_t expires){
+    // A section rebuild reorders triangles, but unchanged cell+appearance IDs
+    // still refer to the same live RE instances. Rebuild only their mask, keeping
+    // the old lease deadline; never grant a new block an unacknowledged receipt.
+    if(!instanceReceiptValid||!expires)return;
+    const auto it=sections.find(key);if(it==sections.end())return;
+    const auto&m=it->second;std::vector<std::uint8_t>mask((m.nativeTriangles.size()+7)/8);bool any=false;
+    for(std::size_t i=0;i<m.nativeTriangles.size();i++)if(m.nativeTriangles[i].kind&&std::binary_search(instanceReceipts.begin(),instanceReceipts.end(),m.nativeTriangles[i])){mask[i/8]|=1u<<(i%8);any=true;}
+    if(any&&accept_native_section(key,m.nativeRevision,mask,expires>=500?expires-500:0))nativeViews[key].expires=expires;
 }
 bool RenderStore::accept_native_section(SectionKey key,std::uint64_t sourceRevision,std::span<const std::uint8_t> mask,std::uint64_t now){
     auto it=sections.find(key);if(it==sections.end()||it->second.nativeRevision!=sourceRevision)return false;
@@ -209,7 +220,8 @@ bool RenderStore::consume(std::uint32_t type,std::span<const std::uint8_t> p) {
         if(!sections.contains(k)&&sections.size()>=kMaxSections) break;
         Mesh m; ok=mesh(m,p,sizeof(h),0,h.vertexCount,rev); if(ok){m.origin[0]=double(h.sx)*16;m.origin[1]=double(h.sy)*16;m.origin[2]=double(h.sz)*16;
             register_models(m,k);
-            sectionAtlasRects[k]=atlas_rects(m,atlas);nativeViews.erase(k);sections[k]=std::move(m);} break;
+            const auto old=nativeViews.find(k);const auto lease=old==nativeViews.end()?0:old->second.expires;
+            sectionAtlasRects[k]=atlas_rects(m,atlas);nativeViews.erase(k);sections[k]=std::move(m);remap_instance_section(k,lease);} break;
     }
     case proto::kRenAvatar: {
         proto::RenAvatar h; ok=read(p,h)&&mesh(avatar,p,sizeof(h),h.batchCount,h.vertexCount,rev); break;

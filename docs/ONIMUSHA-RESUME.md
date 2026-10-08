@@ -5,6 +5,28 @@
 
 ## 最新结果与下一步
 
+### 20:41 原生显示范围／方块编辑闪回修正版已安装，等待启动
+
+本节替代旧的当前状态。用户已安全关闭接管并退出；游戏、MC、旧转换器均已退出。
+已请用户启动鬼武者进入场景、暂不 F10，待回复后连接原世界与新版转换器。
+原世界 `OnimushaMC-XYZ-v2` 未修改，65 文件完整备份在
+`runtime/test-backups/native-lighting-repair-20261008-204039`。
+78/78 部署哈希已核对；探针保持 disabled。安装回执 `logs/native-lighting-repair-20261008/install.json`。
+DLL `C7B7A300E52D9C0E28AA7D0622498D4A041F79BFE62B5402B58815D57631B014`；
+models Lua `121BCF520DD1E06DFA443D334707261E557B4A975053A31125FAD1A000034D68`；JAR 未改变，protocol15。
+
+用户此前已确认自动转换的方块光照生效、手持物光照生效，但存在：超过约16m回退、放拆瞬间全部回退、F5身体仍MC效果。
+本版将显示扩大128m/最近1280实例，显示GO不再依附16m碰撞GO；区域网格重建时按位置+外观保留未改变实例的抑制掩码，旧租期不延长。
+资源预载隐藏绘制但启用组件，最多8个同时加载，暂停/后台时间不计超时，最多3次尝试；dynamic_streams分别记录avatar/scene/hands的desired/ready/errors。
+身体加载问题仍需实景确认，不能宣称已修复。原生点光源、近镜头淡化（此前hook调用0）也仍待实景验收。
+
+转换器最初死亡原因已确认：Windows JSON读者短暂占用导致os.replace抛PermissionError；现加入有界重试、结果待发布队列、恢复已完成回执。
+新方块请求优先于实体面积压，每4个任务重新检查队列，取消每任务扫描整个磁盘资源缓存。
+修正版：3/3原生CTest（含真实D3D12/WARP、退出游戏后DLL API）、30个Lua回归脚本、3个worker IO测试通过。
+真实后台转换器4任务到MESH/MDF/TEX写入及哈希回读通过；宿主结束后自动退出。
+下一轮只测：约30m外方块、连续放拆已有类型是否整片闪回、F5身体/装备；读取dynamic_streams与resource_errors。
+
+
 ### 19:53 当前运行：protocol 15 已连接，等待自动方块转换实景测试
 
 用户已启动并进入场景。游戏 PID46412，MC PID111780，转换器 Blender PID122116，原世界 OnimushaMC-XYZ-v2。

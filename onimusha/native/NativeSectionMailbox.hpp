@@ -15,7 +15,7 @@ public:
     std::string error;
     bool busy();
     std::string request(const std::filesystem::path& root,const RenderStore& store,SectionKey key,std::uint64_t revision);
-    std::string request_model(const std::filesystem::path& root,const RenderStore& store,std::uint32_t model);
+    std::string request_model(const std::filesystem::path& root,const RenderStore& store,std::uint32_t model,unsigned priority=1);
     std::uint64_t count() const{return sequence;}
 };
 }

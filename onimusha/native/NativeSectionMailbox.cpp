@@ -3,8 +3,9 @@
 #include <fstream>
 #include <sstream>
 #include <chrono>
+#include <algorithm>
 namespace omc {
-std::string NativeSectionMailbox::request_model(const std::filesystem::path&root,const RenderStore&s,std::uint32_t model){
+std::string NativeSectionMailbox::request_model(const std::filesystem::path&root,const RenderStore&s,std::uint32_t model,unsigned priority){
     if(busy()||sequence>=8192||!s.cubeConnected||!s.cubeCleared||s.atlas.rgba.empty())return {};
     auto it=s.blockModels.find(model);if(it==s.blockModels.end())return {};
     if(!session)session=GetTickCount64();
@@ -36,7 +37,8 @@ std::string NativeSectionMailbox::request_model(const std::filesystem::path&root
             proto::RenSection sh{0,0,0,std::uint32_t(v.size())};write(dir/"section.bin",&sh,sizeof(sh),v.data(),v.size()*sizeof(proto::RenVertex));
             std::ostringstream j;j<<"{\"id\":\""<<id<<"\",\"host_pid\":"<<GetCurrentProcessId()<<",\"world\":"<<world<<",\"epoch\":"<<epoch<<",\"mc_pid\":"<<pid<<",\"generation\":"<<gen<<",\"model\":"<<model<<",\"atlas\":\""<<atlasName<<"\",\"animated\":[";
             bool first=true;for(auto r:rects){if(!first)j<<',';first=false;j<<'['<<r.x<<','<<r.y<<','<<r.w<<','<<r.h<<']';}j<<"]}";
-            const auto data=j.str();write(dir/"request.tmp",data.data(),data.size(),"",0);std::filesystem::rename(dir/"request.tmp",dir/"request.json");return {};
+            auto data=j.str();data.pop_back();data+=",\"priority\":"+std::to_string(std::min(priority,2u))+"}";
+            write(dir/"request.tmp",data.data(),data.size(),"",0);std::filesystem::rename(dir/"request.tmp",dir/"request.json");return {};
         }catch(const std::exception&e){return e.what();}
     });return id;
 }

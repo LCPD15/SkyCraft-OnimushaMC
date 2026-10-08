@@ -25,7 +25,7 @@ end
 lua.execute((Path(__file__).resolve().parents[1]/'onimusha_native_models.lua').read_text(encoding='utf-8'))
 lua.execute(r'''
 advance(30);assert(captures==1 and #ack_rows==0 and created==1)
-assert(not objects[1].draw and not objects[1].enabled)
+assert(not objects[1].draw and objects[1].enabled)
 loaded=true;advance(15);assert(#ack_rows==2 and created==3 and destroyed==1)
 assert(objects[2].p.x==-8.5 and objects[2].p.y==-17.5 and objects[2].p.z==-26.5)
 print('PASS unknown model IDs auto-capture once; nonfull models get owned display at calibrated block center')
@@ -35,8 +35,11 @@ print('PASS two appearances share conversion; removal destroys only display-owne
 sample.cubes={{x=1,y=2,z=3,kind=101}}
 local go=create_go('physics','folder');owners['1:2:3']={go=go,ready=true}
 advance(3);assert(#ack_rows==1)
-onimusha_native_sections.stop();advance(12,false);assert(destroyed==3 and objects[4].valid and not objects[4].enabled)
-print('PASS full cube borrows collider owner; disabling never destroys collision GO')
+local display=objects[5];assert(display.draw and not objects[4].draw)
+owners['1:2:3']=nil;objects[4].valid=false;advance(3)
+assert(display.valid and display.draw and #ack_rows==1)
+onimusha_native_sections.stop();advance(12,false);assert(destroyed==4 and not display.valid and not objects[4].enabled)
+print('PASS independent display survives nearby collider retirement; disabling destroys only owned display')
 advance(3);assert(#ack_rows==1 and captures==1)
 sample.cubes[2]={x=2,y=2,z=3,kind=102};advance(20)
 assert(captures==2 and #ack_rows==2)

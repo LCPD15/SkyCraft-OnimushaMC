@@ -267,12 +267,14 @@ int capture_model(lua_State*L){
     if(!active()||!lua_istable(L,1)||!valid_number(L,1,"model",model)||!valid_number(L,1,"epoch",epoch)||epoch!=host.collisionEpoch||model<1||model>UINT32_MAX||model!=std::floor(model)){lua_pushnil(L);return 1;}
     wchar_t path[32768]{};GetModuleFileNameW(nullptr,path,32768);
     const auto root=std::filesystem::path(path).parent_path()/L"reframework/data/onimusha_mc/native_models";
-    try{const auto id=sectionMailbox.request_model(root,store,std::uint32_t(model));if(id.empty())lua_pushnil(L);else lua_pushstring(L,id.c_str());}
+    const auto priority=number(L,1,"priority",1)==0?0u:1u;
+    try{const auto id=sectionMailbox.request_model(root,store,std::uint32_t(model),priority);if(id.empty())lua_pushnil(L);else lua_pushstring(L,id.c_str());}
     catch(const std::exception&e){sectionMailbox.error=e.what();lua_pushnil(L);}return 1;
 }
 int snapshot_instances(lua_State*L){
     std::scoped_lock lock(mutex);const bool valid=active()&&store.cubeCleared;const auto rows=valid?store.nearby_instances(mc.x,mc.y,mc.z):std::vector<NativeCube>{};
     lua_createtable(L,0,8);ifield(L,"host_pid",GetCurrentProcessId());bfield(L,"ready",valid);ifield(L,"world_id",store.cubeWorld);ifield(L,"epoch",store.cubeEpoch);ifield(L,"mc_pid",store.cubePid);ifield(L,"generation",store.cubeGeneration);
+    bfield(L,"foreground",window&&GetForegroundWindow()==window);nfield(L,"radius",128);
     lua_createtable(L,int(rows.size()),0);int i=1;for(auto p:rows){lua_createtable(L,0,4);nfield(L,"x",p.x);nfield(L,"y",p.y);nfield(L,"z",p.z);nfield(L,"kind",p.kind);lua_rawseti(L,-2,i++);}lua_setfield(L,-2,"cubes");
     const auto lights=valid?store.nearby_lights(mc.x,mc.y,mc.z):std::vector<NativeLight>{};
     lua_createtable(L,int(lights.size()),0);i=1;for(auto p:lights){lua_createtable(L,0,5);nfield(L,"x",p.x);nfield(L,"y",p.y);nfield(L,"z",p.z);nfield(L,"color",p.color);nfield(L,"level",p.level);lua_rawseti(L,-2,i++);}lua_setfield(L,-2,"lights");return 1;
