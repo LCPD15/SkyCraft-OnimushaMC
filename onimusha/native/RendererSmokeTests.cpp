@@ -133,6 +133,9 @@ void dynamic_gpu_test(Gpu&gpu){
     store.release_dynamic();store.textures[1].rgba[3]=255;store.textures[1].revision=90004;
     gpu.clear();renderer::render(store,{},mc,camera);pixels=gpu.readback(w,h);p=pixels.data()+(std::size_t(h/2)*w+w/2)*4;
     check(p[2]>240&&p[1]<5,"release restores source entity drawing without stale GPU ownership");
+    for(auto&v:store.scene.vertices)v.flags|=1u<<21;store.scene.revision=++store.revision;
+    gpu.clear();renderer::render(store,{},mc,camera);pixels=gpu.readback(w,h);p=pixels.data()+(std::size_t(h/2)*w+w/2)*4;
+    check(p[0]>180&&p[1]>180&&p[2]>240,"TNT white overlay survives the real GPU fallback shader without a new texture");
 }
 void transparency_gpu_tests(Gpu& gpu){
     RenderStore store;store.atlas={1,1,{255,255,255,255},101};

@@ -221,3 +221,16 @@ then acknowledgement 1 at (12,65,4), renewed MC PID, and re-export of the atlas,
 pre-existing stone mesh/solid mask and HUD. The final host exit triggers normal
 MC save/quit. This test does not exercise actual Onimusha or queued health events
 across a host restart.
+
+
+### Dynamic native faces (2026-10-09, protocol 15 unchanged)
+
+`snapshot_native_dynamic()` advertises `stable_faces=true`; each face includes `id`, `first`,
+`kind`, `tint` (packed RGBA), position, quaternion and scale. `id` survives list reordering and
+uniform tint changes, is scoped to this plugin lifetime, and is never recycled. `first` remains
+a source vertex offset, not an instance identity. `ack_native_dynamic({epoch, stable_faces=true,
+avatar|hands, faces={{id,kind},...}})` acknowledges the actual live instances. Removed IDs in an
+in-flight snapshot are discarded without rejecting surviving parts. Unknown future IDs, wrong
+models, duplicates or more than512 entries are rejected. Legacy offset receipts remain accepted.
+The 150ms ownership lease and epoch/context gates still apply. Empty receipts release a stream.
+Uniform vertex colors are carried as instance tint; nonuniform colors remain baked in the model.

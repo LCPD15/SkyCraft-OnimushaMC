@@ -38,6 +38,10 @@ class WorkerIO(unittest.TestCase):
             value=dict(req,ok=True,empty=True);atomic_json(job/'result.json',value)
             self.assertEqual(completed_result(job,req),value)
             self.assertIsNone(completed_result(job,dict(req,epoch=9)))
+            self.assertIsNone(completed_result(job,dict(req,white_flash=True)))
+            white=dict(value,white_flash=True);atomic_json(job/'result.json',white)
+            self.assertEqual(completed_result(job,dict(req,white_flash=True)),white)
+            self.assertIsNone(completed_result(job,req))
             (job/'result.json').write_text('')
             self.assertIsNone(completed_result(job,req))
 

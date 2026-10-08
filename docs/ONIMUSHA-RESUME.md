@@ -5,6 +5,155 @@
 
 ## 最新结果与下一步
 
+### 2026-10-09 02:00 TNT／像素边缘／持久缓存修正版已安装，游戏均关闭
+
+用户睡觉并明确要求处理完关闭游戏。通过 Alt+F4 正常关闭鬼武者；MC于01:50:57记录
+宿主退出、Saving players/worlds/chunks，旧worker退出。65文件原世界备份且SHA逐一核对：
+`runtime/test-backups/tnt-pixel-cache-20261009-0153`，含旧DLL/JAR/Lua/manifest/launch args。
+
+真实独立MC世界 `OnimushaMC-TNT-Pixel-20261009` 已执行并保存退出：
+38帧受击、158帧TNT，其中78帧white、80帧plain，scale1→1.16107，消息错误0。
+新Mixin正常加载，引线audio start=STARTED，fuse=10时active=true，爆炸后stop。
+该证据不代替鬼武者本身的视觉/听觉验收。3项native CTest均实际通过、无跳过。
+证据 `logs/tnt-pixel-20261009/animation-smoke/result.json` 和 `logs/tnt-pixel-animation-20261009.stdout.log`。
+
+新版DLL/JAR/native_models Lua已安装，79项部署文件核对一致；原世界65文件在独立测试后SHA未变。
+恢复原世界启动参数，未留下测试进程。安装收据 `logs/tnt-pixel-20261009/installed.json`。
+当前指纹：DLL AF35EF3301A5724C41BA57CAB616C89F9F3A3158FF1C344A15A23FEA618AE77C；
+JAR B5AEDA8E97EEF4B07AD3F1A516B6C014254A402BD26B3E1B13653475E9B12EEA；
+models Lua FCF9E3DF114847D64EA1264C2853BE9715B55A118D211D1FAF63611526ACF920。
+候选归档 `build/candidates/tnt-pixel-cache-20261009`。
+已经将30组实际捕获、回读通过的用例（29个唯一缓存条目）写入生产本地缓存，含几何/材质/TEX及构建验证报告，
+收据 `logs/tnt-pixel-20261009/primed-cache.json`；没有修改游戏原生资产或原存档。
+
+明天：用户启动鬼武者进场景后，连接原世界并启动新版worker，确认cache_hit/初始化无异常；
+再复测①圆石、梯子和人物像素边缘及帧率②TNT第一次/第二次闪白、最后半秒膨胀及引线声。
+全部游戏现已关闭，不应在用户睡觉期间重新打开原世界。没有待回复问题。
+
+#### 本轮实现与离线检查记录
+
+用户恢复任务并要求修复原生过滤导致的模糊，随后要求将已转换方块存到 MOD 本地目录供后续直接使用。
+当前游戏 PID107640、MC120964、旧 worker96892 仍运行，接管关闭。独立 render_userdata 探针已 removed/destroyed，
+native_object_probe 和 combat_inventory 控制 disabled，两个控制的部署指纹已更新。原存档没有改动。
+
+候选源码及构建：
+- 动态顶点 bit21 独立携带白闪，保留外观模型和稳定面 ID。Lua 预加载白色 MDF，再切缓存材质；
+  不反复创建或重绑 Mesh。仍需鬼武者现场验证 material swap 无闪回/崩溃。
+- 更新变换改为先 LocalScale 后世界位置/旋转，并保留 WorldAABB 诊断。膨胀画面未验收；不宣称已修好。
+- Fabric TntFuseAudio 用跟随 PrimedTnt 的位置音效持续到引线结束；独立于绘制回执，最多32个。
+  只替换附近对应 PrimedTnt 的一次播放，不吞掉矿车或其他使用同音效的对象。待隔离MC实际启动验证 Mixin 和声音起止。
+- 转换器沿原贴图色块划分三角形，并收缩每块采样 UV 到同色区域内部，保留4倍最近邻扩图。
+  不改全游戏过滤；会增加每个模型的三角形数，但不增加实例对象数。实际方块237～3066三角形。
+  34个实际捕获用例含4个既有透明/退化UV回退；30组资源导出与回读通过，面积误差<1e-5。
+  首次实际转换约0.22～0.46秒/外观；游戏画面清晰度及帧率尚待验收。
+- `native_model_cache.py` 持久索引在 `assets/native-models/live/cache-v2/`，资源仍存同级 section_*。
+  key含源几何、贴图、动画范围、白闪变体、转换代码/模板/写入器/Blender版本，不含PID/模型ID/世界ID。
+  命中跳过 convert_model 和 build，校验MESH/MDF/TEX指纹后直接发布本次会话的新回执。
+  旧模糊资源不当作新版缓存。异常/缺失索引为未命中；已加载不可变资源不原地覆盖。
+
+验证：Fabric build/test通过；native及真实D3D12 WARP绘制测试通过（含白闪像素读回）；
+5项Lua共享资源/稳定ID/预载/白闪切材质回归通过；像素过滤、白闪形状、缓存、worker IO单测通过。
+真实Blender worker在完全隔离fixture目录跑两次进程：更换PID/世界/模型ID后仍命中同资源；
+首次0.553秒，重启命中0.114秒，证据 `logs/tnt-pixel-20261009/cache-worker-test/014150/result.json`。
+不是 RE 游戏内加载耗时或视觉验收。生产 worker 尚未重启。
+
+上述停止/备份/隔离测试/安装流程已经执行，结果见本节顶部。鬼武者视觉复测尚未执行。
+
+
+### 2026-10-09 TNT 仍未通过；用户 Escape 停止电脑操作
+
+用户确认两次活动 TNT 切原生后，闪白及临爆前膨胀均看不到。声音进一步澄清：爆炸声有，
+引线嘶嘶声只在 MC 绘制期间听到，切原生即消失。不要写成所有声音均没有。
+两次记录 `tnt-still-frozen-user.json` 的实际 Transform scale 达 1.18155/1.16108；
+原生爆炸 shell 两次成功。这不能替代画面验收。
+
+本地 26.3 TntRenderer 字节码确认只在最后 10 ticks 膨胀，白闪每 5 ticks 切换。
+原版 entity.tnt.primed 调用一次 playSound；当前 assets 的 random/fuse.ogg 长 2.830771 秒。
+没有找到原生绘制切换停止 Java 声音的逻辑，但尚未采集实时声音起止，不可下结论声音正常。
+确定遗漏：AvatarExporter 将白闪只转换为 fullbright light，DynamicModels canonical face 又将
+light 清零。因此原生白闪丢失；尚未修复。不要用每次闪白新建/重绑 Mesh 的办法修复。
+
+用户安全关闭 F10 后，已热更新可选 WorldAABB 读回（失败仅记录，不影响绘制）。
+独立 USER3 显示探针新增 replay_scale/offset/flash_probe 控制；flash_probe 未开启且未验证，
+不可接入生产。临时面按 1/1.3 倍各停留 180 帧，用于视觉检查，不产生爆炸或改 MC 存档。
+`tnt-scale-replay-before-stop.json` 保存实际 scale=1.3 及 WorldAABB 尺寸 1.3 的记录。
+电脑操作工具已成功找到鬼武者窗口，但随后用户物理 Escape 停止操作，未取得两尺寸画面对照。
+已发送 remove 并关闭独立探针；无新增 DLL/JAR，角色切物品和铁傀儡受击的已通过修正保留。
+Lua 换序和 USER3 生命周期回归通过。备份 `runtime/test-backups/tnt-draw-audit-20261009`。
+下一步仍为真实 TNT 渲染/闪白和声音时间对齐，不能提前报已修好。
+
+### 2026-10-09 道具切换与铁傀儡受击连续性已实景通过
+
+用户对新DLL的两项测试回复“都OK”：第三人称切换道具时身体不再瞬间回退，铁傀儡受击
+保留红闪且不再逐部件重新加载。`switch-hurt-user-passed.json`保留当时状态。
+当前原世界已连接并接管开启；正在请求两次TNT引爆，分别观察临爆前最后半秒膨胀，
+并读取native_sections.dynamic_scale_samples。TNT缩放问题不能提前记为通过。
+本次游戏日志00:04:04有已有相机诊断getActiveCameraParam调用异常记录，游戏仍运行、
+相机接管正常；它不是Mesh.setMesh绑定异常，不得笼统声称整个REF日志无错误。
+
+
+### 2026-10-09 00:00 稳定部件编号/受击实例颜色已安装，等待重新进场景
+
+用户进一步确认：第一人称手持物、铁傀儡受鬼武者光照正常；切换道具缓存生效，不再逐个恢复。
+仍有问题：切换瞬间身体闪回MC一次，新道具约1秒等待；铁傀儡受击后整体回退并逐个恢复；
+活动TNT切换原生后用户观察到缩放停止。不要把这些问题标成全部通过。
+
+用户已退出游戏，MC日志23:50:59确认保存退出；原世界65文件哈希备份在
+`runtime/test-backups/dynamic-identity-tint-20261008-235156`。DLL/JAR Lua实验前版本均保留。
+隔离MC世界`OnimushaMC-Animation-20261008`完成后亦已保存退出，不改原存档。
+
+候选修改：
+- DLL为动态面分配不复用的稳定ID；列表换序保留相同外观实例ID，原有绘制回执继续有效。
+  Lua回执遇到已经消失的旧道具，只忽略该面；不会拒收整个人物。150ms租期不延长。
+- 均匀顶点颜色从纹理身份拆为实例BaseColor，受击红闪不再创建一套贴图和Mesh。
+  材质颜色以线性值写入当前私有Mesh；非均匀顶点颜色仍保留原模型处理。
+- Lua兼容旧DLL的偏移回执，新DLL使用stable_faces/id；动态结果检查从15帧缩为3帧，
+  每帧最多8个结果读取，仍最多2个新动态对象，不提高分配上限。
+- 新增有界缩放回读（场景中类似单位立方体且缩放变化时，最多1面/帧、最后32条）。
+  TNT问题未复现于隔离源几何，不能声称已确定修好；下次实际游戏引爆后检查此记录。
+
+验证：3项native CTest全部通过（DLL API在原游戏退出后实际执行，无跳过），Lua动态、换序、
+红闪复原、预加载/上限、方块共享/加载以及独立USER3探针回归通过。
+独立原生模型get/setMaterialFloat4回读正确；静止位置/旋转时scale和WorldAABB也随变化。
+**材质实例互不影响的双对象检查尚待下次游戏启动**，探针已准备但启动控制关闭。
+隔离真实MC捕获37帧受击变色、158帧TNT，临爆几何由1.0增至1.17345，消息错误0；
+证据`logs/native-dynamic-engine-loader-20261008/animation-smoke`。该结果不等于鬼武者视觉验收。
+
+已安装DLL E6E8434E09B2E2905172F216322B7F4CD013598C6943541AE7C79E10C473449C，
+models Lua 0752CDC70114B380C4D2ABB906E0CF513979B89C18B99F9EEDF5B601CCECDBF6，
+probe Lua B6869B8D687CB40C4F7925D1F8F0A1F6F31B60E7BF69428162F0D4026D569B5E。
+JAR不变，协议15；部署79项无差异。运行配置F10关闭，动态三个流启用，独立探针disabled。
+
+用户已正常进场景（PID107640）。私有双模型检查已通过：一个实例红色1/.55/.55，
+共用同一MDF的另一个仍1/1/1，material_isolation.isolated=true；两个对象均撤除。
+日志material-isolation-live/removed。原MC世界已启动（Java120964、worker96892），接管仍关闭。
+需要复测：道具切换瞬间身体连续性、铁傀儡受击红闪/光照连续性、TNT临爆前缩放及scale回读。
+
+
+### 23点后 动态原生绘制恢复及道具切换复用候选
+
+本节取代下面动态硬关闭的停点。引擎 USER3 加载路径已用于动态面；先完成独立面419次
+移动/旋转/缩放及撤除，再预加载226个玩家面和48个场景面。用户已确认第三人称角色与
+身上道具的鬼武者光照、动作正确；用户同时发现切换手持道具导致逐个恢复光照。
+
+已修正动态实例身份：顶点列表偏移不是稳定身份，保留偏移与外观均相同的对象，再按
+同一流/同一外观复用移位的对象；只销毁真实消失的部件。偏移整体移动及循环交换的
+回归通过。用户确认安全后已自动关闭接管并热更新，generation6 loaded。
+目前正在实测此修正及第一人称；不能把它们、NPC或活动TNT的画面结果预先记为通过。
+
+运行控制 `reframework/data/onimusha_native_dynamic_control.json`：enabled=true、
+preload_only=false、hands/avatar/scene均true、max_instances=768、per_frame=2。
+没有控制文件时动态默认关闭；最多2个新动态对象/帧，共768个，所有Lua原生对象总上限2560。
+每组件只绑定一次，保留依赖直到延迟销毁完成；不允许恢复直接holder创建、定时重绑或组件重建。
+第一人称须整组完整且回执接受后才隐藏MC层；单外观失败仅回退对应部分。
+
+日志：`logs/native-dynamic-engine-loader-20261008/`。本轮原存档未编辑，DLL/JAR未改。
+安装清单新增动态控制文件，目前79项。第一次动态预载曾出现一条worker.json读取EOF并恢复，
+没有新增Mesh.setMesh异常；不要写成所有日志绝对无错误。
+最新快照after-reorder-await-user：11/11方块、156/156手持面、48/48场景面加载就绪，
+dynamic_reused=1362，资源错误为空。此快照说明接口就绪，不能替代用户视觉确认。
+
+
 ### 22:49 方块光照、放拆、约30米显示与 F10 恢复实景通过
 
 用户追加确认：放置/拆除时其他方块不再全体闪回，约30米仍保持鬼武者光照；

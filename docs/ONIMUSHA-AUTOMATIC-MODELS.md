@@ -6,23 +6,22 @@
 
 ## 安装状态
 
-22:39 已热更新引擎 USER3 依赖加载候选；**玩家、手持物、NPC、活动 TNT 的原生绘制仍关闭**。
-21:16 组件重建版本崩溃；恢复旧的定时 holder 重绑后，21:40 仍在 `Mesh.setMesh` 出现异常，
-导致新增方块让全部绘制回退。以上两条资源加载路径均已撤回，不能作为可靠回退版本。
-新路径通过引擎反序列化 Mesh/MDF holder，4 个全新单方块资源首次加载及撤除成功。
-每组件绑定一次；取消超时重绑/重建，单类型失败不会清除已成功方块的回执。
-22:45 用户已确认接管时方块光照正常，新创建方块等待时间明显缩短；日志11/11方块就绪，
-6种外观已加载，热更新后无新增绑定异常。22:49 用户进一步确认放拆不再全体闪回、
-约30米仍有原生光照、F10恢复正常；日志显示229个显示对象全部撤除，碰撞亦无残留。
-长期稳定性、更多外观与动态实体仍需单独验证。
+2026-10-09 00:00 已安装稳定部件编号和实例颜色候选，等待启动及复测。
+用户已确认第三人称角色/装备、第一人称手持物和铁傀儡原生光照正确，部件缓存避免道具切换
+逐个恢复；仍有瞬间身体回退、受击后重建和活动TNT缩放异常。当前候选不能提前标记通过。
 
-The engine-owned USER3 dependency loader passed the user's block-lighting,
-place/remove continuity, approximately 30 m visibility and F10 restoration tests.
-All 229 display objects were retired and no collision objects remained after takeover stopped.
-Native entity rendering remains disabled; this result does not validate that path.
-78项部署哈希核对通过；本轮未修改存档。安装回执及旧文件：
-`G:/Onimusha_MC_mod/runtime/test-backups/engine-resource-loader-20261008-223922/receipt.json`。
-此前128米显示和放拆保留改动仍待实景验收，不能视为已全部通过。
+DLL动态面编号现在独立于顶点偏移，换序与旧道具消失不会使整个人物的回执失效；
+受击颜色改为Mesh实例BaseColor，保留红闪且不重新转换贴图。动态结果读取每3帧检查，
+最多8个结果/帧、2个新对象/帧。全新外观仍有转换/加载成本，不能承诺零延迟。
+
+方块光照、放拆连续、约30米显示和F10恢复已通过，候选保留该路径。
+动态控制hands/avatar/scene启用、768实例上限；没有控制文件时默认关闭。
+79项部署哈希一致，原世界65文件已备份，JAR及协议15不变。
+
+The user has verified native lighting on the avatar, held items and iron golems. Stable face IDs
+and per-instance hurt tint are installed but await live regression testing. TNT source capture
+shows growth from 1.0 to 1.17345 before detonation; the reported native scale freeze remains
+under investigation, with bounded engine-scale readback added for the next live test.
 
 ## 自动转换怎样工作
 
@@ -48,14 +47,14 @@ USER3 是私有 `app.montage.data.MontagePartsModelData` 数据容器，仅填�
 
 ## 玩家、手持物、NPC
 
-**当前生产版本隔离此功能（`DYNAMIC_NATIVE_ENABLED=false`）。以下描述仅是尚未稳定的实验实现。**
-动态对象统一回退 MC 渲染，所以不会获得鬼武者光照/遮挡。战斗、实体寻路和爆炸伤害桥接仍保留。
-逐面资源加载曾造成大量排队；重建加载组件的修补发生真实游戏崩溃。必须先解决资源生命周期和
-批量绘制，再恢复此功能。离线 mock 通过不能证明原生引擎安全。
+运行开关位于 `onimusha_native_dynamic_control.json`，可分别启用玩家、手持物和场景实体，
+也可设为仅预加载。引擎生成的Mesh/MDF holder持续保留到对象销毁，每组件仅绑定一次。
+单外观加载/绑定错误不撤回已经成功的方块与其他动态流。
 
 实际 MC 玩家、装备和铁傀儡等实体的可支持矩形面转换为共享资源，动画仅更新原生实例变换。
 同一面移动时不重复导出文件。玩家、场景实体、第一人称手持物各最多 512 面。
-伤害变色或换装备产生的新外观尚未就绪时恢复 MC 绘制。
+均匀受击颜色直接写入当前原生实例；换装备产生的新外观尚未就绪时，该部分保留 MC 绘制。
+切换道具改变顶点偏移时，按流和外观复用已有对象，避免将身体一起销毁重建。
 
 第一人称手持物单独捕获原版姿态并校正 FOV；整组资源全部就绪才停止 MC 的手持物层绘制。
 未就绪、回执失败或 F5 切换均撤回原生显示。第一人称道具不向场景投射巨大近镜头阴影。
@@ -135,3 +134,19 @@ candidate is installed and its deployment hashes and offline isolation checks pa
 startup/acceptance check is still pending. Animated/translucent surfaces
 remain Minecraft-rendered, partial-block native collision and native AI navigation are not added, and dense
 builds/multiple NPCs still require performance testing. Previous navigation experiments remain disabled.
+# 2026-10-09 持久缓存与像素采样修正版
+
+本节修改已安装但尚未完成鬼武者游戏画面验收，仅适用于本项目的鬼武者版本。
+
+转换资源保存在 `G:/Onimusha_MC_mod/assets/native-models/live/section_*`；
+`cache-v2/*.json` 记录输入内容及转换规则对应的资源与 SHA256。换世界、重启游戏或模型编号变化
+不会单独触发重做。模型、资源包贴图、动画元数据、白闪外观或转换代码/格式模板变化时才重新转换。
+命中缓存仍需引擎加载资源，不能承诺零延迟。worker.json 提供 cache_hits/cache_misses。
+原生文件缺失/损坏不会直接确认就绪；旧运行会话的结果 ID 不复用。
+已用实际Blender worker跨进程验证：首次转换0.553秒，重启后内容缓存命中0.114秒（不含引擎加载）。
+30组已通过资源回读的方块/动态面用例合并为29个缓存条目，待游戏启动直接按内容匹配。
+
+像素边界改用同色区域的三角形分区和内部 UV，减少线性采样混入相邻颜色；
+切换为鬼武者绘制后保留像素边界，同时仍由鬼武者计算光照、遮挡及阴影。
+几何数量增加且保留预算，原版动画贴图/混合透明的既有回退范围未扩大。
+此修正会使旧过滤资源失效一次；新版转换后可跨启动直接使用持久缓存。

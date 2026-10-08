@@ -19,6 +19,7 @@ from native_model_input import convert_model
 
 from native_worker_io import atomic_json,completed_result,queued_requests
 from native_model_loader import add_loader,LOADER_VERSION
+from native_model_cache import ModelCache,converter_fingerprint
 
 def main():
     ap=argparse.ArgumentParser()
@@ -41,6 +42,10 @@ def main():
     opts=SimpleNamespace(addon=a.addon,material_template=template/'mc_stone_cube.mdf2.51',
         tex_template=template/'mc_stone_ALBD.tex.251111100',out=a.out,source_kind='runtime-capture',texel_scale=4)
     builder.initialize(opts)
+    import bpy
+    cache=ModelCache(a.out,converter_fingerprint(Path(__file__).parent,
+        (opts.material_template,opts.tex_template),a.addon,bpy.app.version_string))
+    cache_hits=0;cache_misses=0
     done=set();unpublished={};metadata={};started=time.time();built=0;last_heartbeat=0
     known_assets={p.name for p in a.out.glob('section_*') if p.is_dir()} if a.out.exists() else set()
     cache_bytes=sum(p.stat().st_size for p in a.out.glob('section_*/*') if p.is_file()) if a.out.exists() else 0
@@ -49,7 +54,8 @@ def main():
         if time.monotonic()-last_heartbeat<1:return
         last_heartbeat=time.monotonic()
         atomic_json(root/'worker.json',dict(host_pid=a.host_pid,pid=os.getpid(),state='ready',jobs=len(done),built=built,
-            publishing=len(unpublished),alive_at=time.time(),started=started))
+            publishing=len(unpublished),alive_at=time.time(),started=started,
+            cache_hits=cache_hits,cache_misses=cache_misses,cache_directory=str(cache.index),converter=cache.fingerprint))
     def publish(job,result):
         if not atomic_json(job/'result.json',result):
             unpublished[job.name]=result;return
@@ -72,6 +78,7 @@ def main():
             try:
                 assert re.fullmatch(r'\d+_\d+_\d+',job.name) and len(done)<=8192
                 req=json.loads(path.read_text(encoding='utf-8'));assert req['id']==job.name and req['host_pid']==a.host_pid
+                result['white_flash']=req.get('white_flash',False)
                 previous=completed_result(job,req)
                 if previous is not None:
                     # Upgrade old conversion receipts without raw inputs, re-export,
@@ -86,14 +93,19 @@ def main():
                 result.update(model=req['model'],world=req['world'],epoch=req['epoch'],mc_pid=req['mc_pid'],generation=req['generation'])
                 raw=(job/'section.bin').read_bytes()
                 assert re.fullmatch(r'atlas_\d+_\d+_\d+_\d+\.bin',req['atlas'])
-                atlas=(root/req['atlas']).read_bytes()
                 result.update(model=req['model'],world=req['world'],epoch=req['epoch'],
                     mc_pid=req['mc_pid'],generation=req['generation'],source_sha256=hashlib.sha256(raw).hexdigest())
                 begin=time.perf_counter()
-                section,compact,details=convert_model(raw,atlas,req['animated'])
-                result.update(details=details)
-                if section is None:result.update(ok=True,empty=True)
+                cache_key=cache.key(raw,root/req['atlas'],req['animated'],req.get('white_flash',False))
+                cached=cache.load(cache_key)
+                if cached:
+                    cache_hits+=1
+                    stem=cached['asset_id'];files=cached['files'];details=cached['details']
+                    result.update(cache_hit=True,cache_key=cache_key)
                 else:
+                    cache_misses+=1
+                    atlas=(root/req['atlas']).read_bytes()
+                    section,compact,details=convert_model(raw,atlas,req['animated'],white_flash=req.get('white_flash',False))
                     opts.section=job/'compact-section.bin';opts.atlas=job/'compact-atlas.bin'
                     opts.section.write_bytes(section);opts.atlas.write_bytes(compact)
                     # Bound accumulated immutable resources; no overwrite of potentially cached assets.
@@ -102,15 +114,20 @@ def main():
                     assert re.fullmatch('section_[a-f0-9]{20}',stem)
                     if stem not in known_assets:
                         cache_bytes+=sum(p.stat().st_size for p in (a.out/stem).iterdir() if p.is_file());known_assets.add(stem)
-                    dst=a.game/'natives/stm/mod/onimusha_mc/sections'/stem;dst.mkdir(parents=True,exist_ok=True)
-                    for name,sha in report['files'].items():
-                        src=a.out/stem/name;data=src.read_bytes();assert hashlib.sha256(data).hexdigest()==sha
-                        target=dst/name
-                        if target.exists():assert hashlib.sha256(target.read_bytes()).hexdigest()==sha
-                        else:
-                            temp=target.with_suffix(target.suffix+'.tmp');temp.write_bytes(data);os.replace(temp,target)
-                    files=add_loader(a.game,stem,report['files'])
-                    result.update(ok=True,asset_id=stem,triangles=report['triangles'],files=files,loader_version=LOADER_VERSION);built+=1
+                    files=report['files'];built+=1
+                    result.update(cache_hit=False,cache_key=cache_key)
+                    try:result['cache_saved']=cache.store(cache_key,stem,files,details)
+                    except OSError as exc:result['cache_warning']=str(exc) # drawing can proceed without an index
+                result.update(details=details,pipeline_version=2)
+                dst=a.game/'natives/stm/mod/onimusha_mc/sections'/stem;dst.mkdir(parents=True,exist_ok=True)
+                for name,sha in files.items():
+                    src=a.out/stem/name;data=src.read_bytes();assert hashlib.sha256(data).hexdigest()==sha
+                    target=dst/name
+                    if target.exists():assert hashlib.sha256(target.read_bytes()).hexdigest()==sha
+                    else:
+                        temp=target.with_suffix(target.suffix+'.tmp');temp.write_bytes(data);os.replace(temp,target)
+                files=add_loader(a.game,stem,files)
+                result.update(ok=True,asset_id=stem,triangles=details['triangles'],files=files,loader_version=LOADER_VERSION)
                 result['seconds']=round(time.perf_counter()-begin,3)
             except Exception as e:
                 if str(e)=='fully_transparent_model':result.update(ok=True,empty=True)

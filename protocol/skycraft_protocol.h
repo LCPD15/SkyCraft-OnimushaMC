@@ -525,6 +525,7 @@ namespace skycraft::proto
 		std::uint32_t flags;    // bit0: cutout (alpha test), bit1: translucent,
 		                        // bits 4-6: face normal as MC Direction ordinal + 1 (0 = none: lit without a normal)
 		                        // v15 bits 8-20: owning block cell (x+16z+256y)+1, 0 = unowned/fluid.
+		                        // Onimusha v15 dynamic-only bit21: white flash overlay (TNT etc.).
 	};
 	static_assert(sizeof(RenVertex) == 32);
 

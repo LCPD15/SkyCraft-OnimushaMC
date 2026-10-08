@@ -24,7 +24,9 @@ struct Texture {
 struct NativeCube { std::int32_t x{},y{},z{}; std::uint32_t kind{}; auto operator<=>(const NativeCube&) const=default; };
 struct NativeLight {std::int32_t x{},y{},z{};std::uint32_t color{},level{};};
 struct NativeFace {
-    std::uint32_t first{},model{};
+    std::uint32_t first{},model{},id{}; // id survives vertex-list reordering; never reused
+    std::uint32_t tint{0xffffffff}; // per-instance uniform RGBA, never a new texture
+    bool whiteFlash{}; // transient overlay, excluded from model/stable identity
     float position[3]{},rotation[4]{},scale[2]{}; // quaternion w,x,y,z
 };
 struct Mesh {
@@ -55,6 +57,7 @@ struct RenderStore {
     Texture atlas;
     std::uint64_t atlasBaseRevision{};
     std::uint32_t nextModelId{};
+    std::uint32_t nextDynamicFaceId{};
     std::size_t modelBytes{};
     std::map<std::uint32_t,Mesh> blockModels;
     std::map<std::uint32_t,std::uint32_t> modelTextures;
@@ -94,7 +97,7 @@ struct RenderStore {
     std::uint32_t register_model(Mesh model,std::uint32_t textureId);
     const Texture* model_texture(std::uint32_t model)const;
     void prepare_dynamic();
-    bool accept_dynamic(unsigned stream,const std::map<std::uint32_t,std::uint32_t>&faces,std::uint64_t now);
+    bool accept_dynamic(unsigned stream,const std::map<std::uint32_t,std::uint32_t>&faces,std::uint64_t now,bool stableIds=false);
     bool hands_ready(std::uint64_t now) const;
     void partition_dynamic(const Mesh&source,DynamicNativeView&view,std::uint64_t now);
     void release_dynamic();

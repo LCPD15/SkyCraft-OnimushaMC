@@ -196,6 +196,7 @@ public final class SkyClient {
 
 	/** Called at the end of every client tick. */
 	public static void clientTick(Minecraft minecraft) {
+		TntFuseAudio.tick(minecraft);
 		MirrorWorld.tick(minecraft);
 		DiscordPresence.tick(minecraft);
 		SkyDigClient.tick(minecraft);

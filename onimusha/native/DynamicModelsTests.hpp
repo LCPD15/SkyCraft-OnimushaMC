@@ -18,8 +18,15 @@ template<class Check>void dynamic_models_tests(Check check){
  check(s.nativeScene.remainder.vertices.empty(),"pose advance preserves appearance lease across present/game thread timing");
  s.partition_dynamic(s.scene,s.nativeScene,251);check(s.nativeScene.remainder.vertices.size()==6,"stalled pose updater restores MC within 150ms");
  for(auto&v:s.scene.vertices)v.color=0xff8080ff;++s.scene.revision;s.prepare_dynamic();
- check(s.nativeScene.faces[0].model!=id,"hurt flash/tint change cannot reuse old-color resource receipt");s.partition_dynamic(s.scene,s.nativeScene,103);
- check(s.nativeScene.remainder.vertices.size()==6,"changed appearance immediately falls back until newly ready");
+ check(s.nativeScene.faces[0].model==id&&s.nativeScene.faces[0].tint==0xff8080ff,"hurt tint is an instance parameter without resource churn");s.partition_dynamic(s.scene,s.nativeScene,103);
+ check(s.nativeScene.remainder.vertices.empty(),"hurt flash preserves loaded native drawing");
+ const auto flashId=s.nativeScene.faces[0].id;
+ for(auto&v:s.scene.vertices){v.flags|=1u<<21;v.y=2+(v.y-2)*1.3f;v.z=8+(v.z-8)*1.3f;}++s.scene.revision;s.prepare_dynamic();
+ check(s.nativeScene.faces[0].whiteFlash&&s.nativeScene.faces[0].id==flashId&&s.nativeScene.faces[0].model==id,"TNT white overlay keeps base appearance and stable instance");
+ check(std::abs(s.nativeScene.faces[0].scale[0]-2.6f)<1e-5&&std::abs(s.nativeScene.faces[0].scale[1]-3.9f)<1e-5,"TNT swelling survives the canonical face conversion");
+ s.partition_dynamic(s.scene,s.nativeScene,104);check(s.nativeScene.remainder.vertices.empty(),"white TNT flash never revokes the native receipt");
+ for(auto&v:s.scene.vertices)v.flags&=~(1u<<21);++s.scene.revision;s.prepare_dynamic();
+ check(!s.nativeScene.faces[0].whiteFlash&&s.nativeScene.faces[0].id==flashId,"TNT unlit frame resets overlay without rebuilding model");
  s.scene.vertices[2].x+=.2f;s.scene.vertices[4].x+=.2f;++s.scene.revision;s.prepare_dynamic();
  check(s.nativeScene.faces.empty(),"non-rigid/non-rectangular geometry remains Minecraft rendered");
  s.scene.vertices.assign(std::begin(quad),std::end(quad));for(auto&v:s.scene.vertices)v.flags|=2;++s.scene.revision;s.prepare_dynamic();
@@ -28,6 +35,25 @@ template<class Check>void dynamic_models_tests(Check check){
  auto handId=s.nativeHands.faces[0].model;check(!s.hands_ready(100),"unloaded first person hands keep vanilla HUD rendering");
  s.accept_dynamic(2,{{0,handId}},100);check(s.hands_ready(101)&&!s.hands_ready(251),"complete hand receipt controls bounded HUD takeover");
  s.accept_dynamic(2,{},103);check(!s.hands_ready(104),"partial/failed hand loading cannot hide original HUD hands");
+ // Distinct appearances: inserting a new weapon before the body must not
+ // reopen the entire MC body between snapshot/ack and the next native tick.
+ RenderStore r;r.atlas=s.atlas;r.atlasBaseRevision=1;
+ auto append=[&](unsigned variant){for(auto v:quad){v.u+=(variant&255)*.001f;r.avatar.vertices.push_back(v);}};
+ append(0xffffffff);append(0xffeeddcc);r.avatar.batches={{0,0,12,0}};r.avatar.revision=100;r.prepare_dynamic();
+ const auto body=r.nativeAvatar.faces;
+ check(r.accept_dynamic(1,{{body[0].id,body[0].model},{body[1].id,body[1].model}},100,true),"stable body receipts accepted");
+ r.avatar.vertices.clear();append(0xffddaa33);append(0xffffffff);append(0xffeeddcc);r.avatar.batches={{0,0,18,0}};++r.avatar.revision;
+ r.prepare_dynamic();r.partition_dynamic(r.avatar,r.nativeAvatar,101);
+ check(r.nativeAvatar.faces[1].id==body[0].id&&r.nativeAvatar.faces[2].id==body[1].id,"new weapon leaves shifted body identities intact");
+ check(r.nativeAvatar.depth.vertices.size()==12&&r.nativeAvatar.remainder.vertices.size()==6,"between native updates only the new weapon remains MC rendered");
+ auto weapon=r.nativeAvatar.faces[0];auto rows=std::map<std::uint32_t,std::uint32_t>{{weapon.id,weapon.model},{body[0].id,body[0].model},{body[1].id,body[1].model}};
+ // Removal races the old snapshot: accept unchanged parts, discard vanished id.
+ r.avatar.vertices.erase(r.avatar.vertices.begin(),r.avatar.vertices.begin()+6);r.avatar.batches={{0,0,12,0}};++r.avatar.revision;
+ check(r.accept_dynamic(1,rows,102,true),"removed item in an in-flight snapshot cannot reject unchanged body receipts");
+ r.partition_dynamic(r.avatar,r.nativeAvatar,103);check(r.nativeAvatar.remainder.vertices.empty(),"body suppression remains complete after raced removal");
+ r.partition_dynamic(r.avatar,r.nativeAvatar,253);check(r.nativeAvatar.remainder.vertices.size()==12,"stable identity never extends the 150ms rendering lease");
+ const auto oldId=r.nativeAvatar.faces[0].id;r.release_dynamic();++r.avatar.revision;r.prepare_dynamic();
+ check(r.nativeAvatar.faces[0].id!=oldId&&!r.nativeAvatar.receipt.contains(oldId),"release never recycles stable face identities or stale receipts");
  s.release_dynamic();check(s.nativeScene.receipt.empty()&&s.nativeAvatar.faces.empty()&&s.nativeHands.faces.empty(),"takeover/scene exit releases animated draw ownership");
 }
 }

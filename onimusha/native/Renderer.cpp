@@ -77,6 +77,7 @@ Output WorldVS(Input v) {
 }
 float4 WorldPS(Output v):SV_Target {
     float4 t=tex.Sample(pointSampler,v.uv)*v.color;
+    if(v.flags&(1u<<21)) t.rgb=lerp(t.rgb,float3(1,1,1),0.75);
     // Match SkyCraft's alpha-test/blend flags; opaque/cutout never blends.
     if(v.flags&2) clip(t.a-0.001);
     else { clip(t.a-0.5); t.a=1; }

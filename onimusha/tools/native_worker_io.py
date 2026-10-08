@@ -25,6 +25,7 @@ def completed_result(job, request):
     except (OSError,ValueError):return None
     fields=('id','model','world','epoch','mc_pid','generation')
     if not isinstance(value,dict) or any(value.get(k)!=request.get(k) for k in fields):return None
+    if bool(value.get('white_flash'))!=bool(request.get('white_flash')):return None
     if type(value.get('ok')) is not bool:return None
     if value['ok'] and not (value.get('empty') or (value.get('asset_id') and value.get('files'))):return None
     return value

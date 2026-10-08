@@ -268,7 +268,7 @@ int capture_model(lua_State*L){
     wchar_t path[32768]{};GetModuleFileNameW(nullptr,path,32768);
     const auto root=std::filesystem::path(path).parent_path()/L"reframework/data/onimusha_mc/native_models";
     const auto priority=number(L,1,"priority",1)==0?0u:1u;
-    try{const auto id=sectionMailbox.request_model(root,store,std::uint32_t(model),priority);if(id.empty())lua_pushnil(L);else lua_pushstring(L,id.c_str());}
+    try{const auto id=sectionMailbox.request_model(root,store,std::uint32_t(model),priority,boolean(L,1,"white_flash"));if(id.empty())lua_pushnil(L);else lua_pushstring(L,id.c_str());}
     catch(const std::exception&e){sectionMailbox.error=e.what();lua_pushnil(L);}return 1;
 }
 int snapshot_instances(lua_State*L){
@@ -295,10 +295,10 @@ int ack_instances(lua_State*L){
 }
 int snapshot_dynamic(lua_State*L){
     std::scoped_lock lock(mutex);store.prepare_dynamic();lua_createtable(L,0,3);
-    ifield(L,"epoch",store.cubeEpoch);bfield(L,"ready",active()&&store.cubeCleared);
+    ifield(L,"epoch",store.cubeEpoch);bfield(L,"ready",active()&&store.cubeCleared);bfield(L,"stable_faces",true);
     auto push=[&](const char*name,const Mesh&m,const DynamicNativeView&v,bool visible){
         lua_createtable(L,visible?int(v.faces.size()):0,0);int i=1;
-        if(visible)for(const auto&f:v.faces){lua_createtable(L,0,14);ifield(L,"first",f.first);ifield(L,"kind",f.model);
+        if(visible)for(const auto&f:v.faces){lua_createtable(L,0,17);ifield(L,"first",f.first);ifield(L,"kind",f.model);ifield(L,"id",f.id);ifield(L,"tint",f.tint);bfield(L,"white_flash",f.whiteFlash);
             nfield(L,"x",f.position[0]+(name[0]=='a'?mc.x:m.origin[0]));nfield(L,"y",f.position[1]+(name[0]=='a'?mc.y:m.origin[1]));nfield(L,"z",f.position[2]+(name[0]=='a'?mc.z:m.origin[2]));
             nfield(L,"qw",f.rotation[0]);nfield(L,"qx",f.rotation[1]);nfield(L,"qy",f.rotation[2]);nfield(L,"qz",f.rotation[3]);nfield(L,"sx",f.scale[0]);nfield(L,"sy",f.scale[1]);lua_rawseti(L,-2,i++);}
         lua_setfield(L,-2,name);
@@ -308,13 +308,14 @@ int snapshot_dynamic(lua_State*L){
 }
 int ack_dynamic(lua_State*L){
     std::scoped_lock lock(mutex);bool ok=active()&&lua_istable(L,1)&&number(L,1,"epoch",-1)==host.collisionEpoch;
+    const bool stable=ok&&boolean(L,1,"stable_faces");
     std::map<std::uint32_t,std::uint32_t> rows;
     if(ok){lua_getfield(L,1,"faces");const auto count=lua_rawlen(L,-1);ok=lua_istable(L,-1)&&count<=512;
         for(std::size_t i=1;ok&&i<=count;i++){lua_rawgeti(L,-1,i);double first{},model{};const auto t=lua_gettop(L);
-            ok=lua_istable(L,t)&&valid_number(L,t,"first",first)&&valid_number(L,t,"kind",model)&&first>=0&&first<2'000'000&&model>=1&&model<=UINT32_MAX&&first==std::floor(first)&&model==std::floor(model);
+            ok=lua_istable(L,t)&&valid_number(L,t,stable?"id":"first",first)&&valid_number(L,t,"kind",model)&&first>=(stable?1:0)&&first<=(stable?double(UINT32_MAX):1'999'999.)&&model>=1&&model<=UINT32_MAX&&first==std::floor(first)&&model==std::floor(model);
             if(ok)ok=rows.emplace(std::uint32_t(first),std::uint32_t(model)).second;lua_pop(L,1);
         }lua_pop(L,1);
-        if(ok)ok=store.accept_dynamic(boolean(L,1,"hands")?2:boolean(L,1,"avatar")?1:0,rows,GetTickCount64());
+        if(ok)ok=store.accept_dynamic(boolean(L,1,"hands")?2:boolean(L,1,"avatar")?1:0,rows,GetTickCount64(),stable);
     }lua_pushboolean(L,ok);return 1;
 }
 int set_camera(lua_State* L){

@@ -19,7 +19,7 @@ void quaternion(V x,V y,V z,float*q){
 }
 void prepare(RenderStore&s,const Mesh&m,DynamicNativeView&v){
  if(v.sourceRevision==m.revision)return;
- v.faces.clear();v.sourceRevision=m.revision;
+ auto previous=std::move(v.faces);v.faces.clear();v.sourceRevision=m.revision;
  // Entity exporter emits quads as 0,1,2,0,2,3. Capture each rectangle once,
  // then update only its position/rotation/scale as Minecraft animates it.
  for(const auto&b:m.batches){
@@ -35,12 +35,27 @@ void prepare(RenderStore&s,const Mesh&m,DynamicNativeView&v){
    V x=ab*(1/w),y=ad*(1/h);
    if(std::abs(dot(x,y))>1e-4f||length(point(p[2])-(a+ab+ad))>1e-4f*std::max(w,h))continue;
    V z=cross(x,y);Mesh model;
+   const bool uniform=std::all_of(p,p+6,[&](const auto&vertex){return vertex.color==p[0].color;});
    const float uvxy[6][2]={{0,0},{1,0},{1,1},{0,0},{1,1},{0,1}};
-   for(int i=0;i<6;i++){auto vertex=p[i];vertex.x=uvxy[i][0];vertex.y=uvxy[i][1];vertex.z=0;vertex.light=0;vertex.flags=1;model.vertices.push_back(vertex);}
+   for(int i=0;i<6;i++){auto vertex=p[i];vertex.x=uvxy[i][0];vertex.y=uvxy[i][1];vertex.z=0;vertex.light=0;vertex.flags=1;if(uniform)vertex.color=0xffffffff;model.vertices.push_back(vertex);}
    const auto id=s.register_model(std::move(model),b.texture);if(!id)continue;
-   NativeFace face;face.first=first;face.model=id;face.position[0]=a.x;face.position[1]=a.y;face.position[2]=a.z;face.scale[0]=w;face.scale[1]=h;quaternion(x,y,z,face.rotation);v.faces.push_back(face);
+   NativeFace face;face.first=first;face.model=id;face.whiteFlash=(p[0].flags&(1u<<21))!=0;face.tint=uniform?p[0].color:0xffffffff;face.position[0]=a.x;face.position[1]=a.y;face.position[2]=a.z;face.scale[0]=w;face.scale[1]=h;quaternion(x,y,z,face.rotation);v.faces.push_back(face);
   }
  }
+ // A vertex offset is not an instance identity. Item changes can move every
+ // body face in the flat list between the Lua tick and the render thread.
+ // Reserve exact matches, then reuse remaining appearances one-to-one, just
+ // as the Lua instance owner does. New geometry never inherits a receipt;
+ // uniform hurt tint is an instance parameter and retains the same identity.
+ std::map<std::pair<unsigned,unsigned>,std::size_t> exact;
+ for(std::size_t i=0;i<previous.size();++i)exact[{previous[i].first,previous[i].model}]=i;
+ std::vector<bool> used(previous.size());
+ for(auto&f:v.faces){auto i=exact.find({f.first,f.model});if(i!=exact.end()){f.id=previous[i->second].id;used[i->second]=true;}}
+ std::map<unsigned,std::vector<unsigned>> spare;
+ for(std::size_t i=0;i<previous.size();++i)if(!used[i])spare[previous[i].model].push_back(previous[i].id);
+ for(auto&f:v.faces)if(!f.id){auto&pool=spare[f.model];if(!pool.empty()){f.id=pool.back();pool.pop_back();}
+  else if(s.nextDynamicFaceId<UINT32_MAX)f.id=++s.nextDynamicFaceId;}
+ std::erase_if(v.faces,[](const auto&f){return !f.id;});
 }
 }
 const Texture*RenderStore::model_texture(std::uint32_t model)const{
@@ -48,11 +63,18 @@ const Texture*RenderStore::model_texture(std::uint32_t model)const{
  if(!it->second)return &atlas;auto t=textures.find(it->second);return t==textures.end()?nullptr:&t->second;
 }
 void RenderStore::prepare_dynamic(){prepare(*this,avatar,nativeAvatar);prepare(*this,scene,nativeScene);prepare(*this,hands,nativeHands);}
-bool RenderStore::accept_dynamic(unsigned stream,const std::map<std::uint32_t,std::uint32_t>&rows,std::uint64_t now){
+bool RenderStore::accept_dynamic(unsigned stream,const std::map<std::uint32_t,std::uint32_t>&rows,std::uint64_t now,bool stableIds){
  if(rows.size()>512)return false;
  prepare_dynamic();auto&v=stream==2?nativeHands:stream==1?nativeAvatar:nativeScene;
- for(auto[first,id]:rows){auto it=std::find_if(v.faces.begin(),v.faces.end(),[&](auto f){return f.first==first&&f.model==id;});if(it==v.faces.end())return false;}
- if(v.receipt!=rows){v.receipt=rows;++v.receiptRevision;v.remainder.revision=0;}
+ std::map<std::uint32_t,std::uint32_t> accepted;
+ for(auto[key,model]:rows){
+  auto it=std::find_if(v.faces.begin(),v.faces.end(),[&](auto f){return (stableIds?f.id:f.first)==key;});
+  // A face may have disappeared since snapshot_native_dynamic. Omit only
+  // that face; do not turn off all unchanged body parts for one render frame.
+  if(it==v.faces.end()){if(stableIds&&key&&key<=nextDynamicFaceId)continue;return false;}
+  if(it->model!=model)return false;accepted[it->id]=model;
+ }
+ if(v.receipt!=accepted){v.receipt=std::move(accepted);++v.receiptRevision;v.remainder.revision=0;}
  v.expires=now+150;return true;
 }
 void RenderStore::partition_dynamic(const Mesh&m,DynamicNativeView&v,std::uint64_t now){
@@ -61,7 +83,7 @@ void RenderStore::partition_dynamic(const Mesh&m,DynamicNativeView&v,std::uint64
  v.remainder.revision=v.depth.revision=++revision;
  std::copy(std::begin(m.origin),std::end(m.origin),std::begin(v.remainder.origin));std::copy(std::begin(m.origin),std::end(m.origin),std::begin(v.depth.origin));
  std::map<unsigned,unsigned>matched;
- if(now<v.expires)for(auto f:v.faces){auto found=v.receipt.find(f.first);if(found!=v.receipt.end()&&found->second==f.model){matched[f.first]=f.model;matched[f.first+3]=f.model;}}
+ if(now<v.expires)for(auto f:v.faces){auto found=v.receipt.find(f.id);if(found!=v.receipt.end()&&found->second==f.model){matched[f.first]=f.model;matched[f.first+3]=f.model;}}
  for(auto b:m.batches){
   const auto rstart=unsigned(v.remainder.vertices.size()),dstart=unsigned(v.depth.vertices.size());
   for(unsigned i=b.first;i+3<=b.first+b.count;i+=3){auto&dest=matched.contains(i)?v.depth:v.remainder;dest.vertices.insert(dest.vertices.end(),m.vertices.begin()+i,m.vertices.begin()+i+3);}
@@ -71,7 +93,7 @@ void RenderStore::partition_dynamic(const Mesh&m,DynamicNativeView&v,std::uint64
 }
 bool RenderStore::hands_ready(std::uint64_t now)const{
  if(nativeHands.expires<=now||hands.vertices.empty()||hands.vertices.size()%6||nativeHands.faces.size()!=hands.vertices.size()/6)return false;
- for(auto f:nativeHands.faces){auto r=nativeHands.receipt.find(f.first);if(r==nativeHands.receipt.end()||r->second!=f.model)return false;}return true;
+ for(auto f:nativeHands.faces){auto r=nativeHands.receipt.find(f.id);if(r==nativeHands.receipt.end()||r->second!=f.model)return false;}return true;
 }
 void RenderStore::release_dynamic(){nativeAvatar={};nativeScene={};nativeHands={};}
 }

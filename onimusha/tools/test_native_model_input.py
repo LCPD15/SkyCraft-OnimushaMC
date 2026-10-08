@@ -31,5 +31,34 @@ class Models(unittest.TestCase):
         self.assertAlmostEqual(area(s),.5)
     def test_deterministic_reuse(self):
         self.assertEqual(convert_model(face(),atlas(),[]),convert_model(face(),atlas(),[]))
+    def test_pixel_boundaries_and_half_uv_sampler(self):
+        # Every original texel has a unique colour. Interpolate the final half
+        # UVs as the RE mesh does, then check the 4x atlas's bilinear footprint.
+        colors=[bytes((x*43,y*37,(x+y)*21,255)) for y in range(4) for x in range(4)]
+        s,a,details=convert_model(face(),struct.pack('<II',4,4)+b''.join(colors),[])
+        self.assertAlmostEqual(area(s),1)
+        w,h,pixels=decode_atlas(a);verts=decode_section(s).vertices
+        import math
+        half=lambda n:struct.unpack('<e',struct.pack('<e',n))[0]
+        for i in range(0,len(verts),3):
+            tri=verts[i:i+3]
+            cx=sum(v[0] for v in tri)/3;cy=sum(v[1] for v in tri)/3
+            expected=colors[min(3,int(cy*4))*4+min(3,int(cx*4))]
+            for v in tri:
+                # The real atlas repeats each texel into 4x4 identical pixels.
+                px=half(v[3])*w*4-.5;py=half(v[4])*h*4-.5
+                for yy in (math.floor(py),math.floor(py)+1):
+                    for xx in (math.floor(px),math.floor(px)+1):
+                        sample=((yy//4)*w+xx//4)*4
+                        self.assertEqual(pixels[sample:sample+4],expected)
+        self.assertTrue(details['pixel_edges'])
+    def test_white_flash_keeps_mesh_and_cutout_shape(self):
+        raw=atlas(alpha=lambda x,y:0 if x==1 else 255)
+        base,tex,_=convert_model(face(),raw,[])
+        flash,white,_=convert_model(face(),raw,[],white_flash=True)
+        self.assertEqual(base,flash)
+        self.assertAlmostEqual(area(flash),.75)
+        self.assertIn(bytes((216,241,211,255)),decode_atlas(white)[2])
+        self.assertNotEqual(tex,white)
 
 if __name__=='__main__': unittest.main()

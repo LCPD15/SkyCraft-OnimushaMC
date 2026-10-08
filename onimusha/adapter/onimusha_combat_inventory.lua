@@ -573,7 +573,9 @@ end
 local function report()
     local r={id=q.id,frame=q.frame,phase=q.phase,error=q.error,position=q.position,
         scene=q.scene_address,object_name=q.name,ground=q.ground,ready=q.ready,destroyed=q.destroyed,
-        collision=q.collision,action=q.action,asset_id=q.asset_id,pending_id=q.pending_id,model_loader=q.model_loader and q.model_loader:get_address()}
+        collision=q.collision,action=q.action,asset_id=q.asset_id,pending_id=q.pending_id,model_loader=q.model_loader and q.model_loader:get_address(),motion=q.motion,motion_updates=q.motion_updates,
+        material_probe=q.material_probe,transform_probe=q.transform_probe,material_isolation=q.material_isolation,
+        replay_scale=q.replay_scale,flash_probe=q.flash_probe}
     if q.mesh_holder and sdk.is_managed_object then
         local h=q.mesh_holder
         r.holder={address=h:get_address(),managed=sdk.is_managed_object(h),factory=q.action=='render_userdata' and 'engine_userdata' or 'create_holder_global'}
@@ -596,6 +598,14 @@ local function report()
     json.dump_file(OUTPUT,r)
 end
 local function cleanup(reason)
+    if q.peer_go then
+        if call(q.peer_go,'get_Valid')then
+            call(q.peer_mesh,'set_Enabled',false);call(q.peer_go,'set_DrawSelf',false)
+            sdk.find_type_definition('via.GameObject'):get_method('destroy(via.GameObject)'):call(nil,q.peer_go)
+        end
+        q.retired[#q.retired+1]={frame=q.frame,go=q.peer_go,mesh=q.peer_mesh,model_loader=q.model_loader,mesh_holder=q.mesh_holder,material_holder=q.material_holder}
+        q.peer_go=nil;q.peer_mesh=nil
+    end
     if q.go then
         if call(q.go,'get_Valid') then
             if q.colliders then call(q.colliders,'set_Enabled',false) end
@@ -701,7 +711,9 @@ local function start(c)
     local p=call(go,'get_Transform'):get_position()
     q.position={x=p.x+3,y=p.y+0.55,z=p.z+3};q.name='OMC_NativeProbe_'..c.id
     q.scene_address=sc:get_address();q.start=q.frame;q.ready=false;q.destroyed=false;q.collision=nil;q.action=c.action
-    q.asset_id=nil
+    q.asset_id=nil;q.motion=c.action=='render_userdata' and c.motion==true;q.motion_updates=0
+    q.inspect_dynamic=c.inspect_dynamic==true;q.tint_probe=c.tint_probe==true;q.material_probe=nil;q.transform_probe=nil;q.material_isolation=nil
+    q.replay_scale=c.replay_scale==true;q.flash_probe=c.flash_probe==true
     local stem=c.action=='physics_cube' and 'mc_stone_cube' or 'unit_cube'
     local resource_path='mod/onimusha_mc/probe/'..stem
     if c.action=='render_section' or c.action=='render_userdata' then
@@ -713,6 +725,12 @@ local function start(c)
         end
         q.asset_id=c.asset_id;resource_path='mod/onimusha_mc/sections/'..q.asset_id..'/'..q.asset_id
         q.position={x=p.x+3-c.section_min.x,y=p.y+0.05-c.section_min.y,z=p.z+3-c.section_min.z}
+        if q.replay_scale and type(c.offset)=='table' then
+            for _,axis in ipairs({'x','y','z'})do
+                local v=c.offset[axis];assert(type(v)=='number' and v==v and math.abs(v)<=6,'Invalid private probe offset')
+                q.position[axis]=p[axis]+v-c.section_min[axis]
+            end
+        end
     end
     if c.action=='render_userdata' then
         -- Let the engine deserialize/own its resource holders. No Montage object
@@ -790,11 +808,68 @@ re.on_application_entry('LateUpdateBehavior',function()
         end
         if q.go then
             if not call(q.go,'get_Valid') then cleanup('removed_invalid');report();return end
+            if q.phase=='visible' and q.motion then
+                -- Isolated private face: exercise the same dynamic transform
+                -- setters without attaching anything to a gameplay character.
+                local angle=(q.frame-q.start)*.01;local t=call(q.go,'get_Transform')
+                t:set_position(Vector4f.new(q.position.x+(q.tint_probe and 0 or math.sin(angle)*.25),q.position.y,q.position.z,1),false)
+                t:set_rotation(q.tint_probe and Quaternion.new(1,0,0,0) or Quaternion.new(math.cos(angle*.5),0,math.sin(angle*.5),0))
+                local scale=.5+.05*math.sin(angle)
+                if q.replay_scale then
+                    -- Long holds allow an actual screen comparison without
+                    -- creating/exploding anything in the Minecraft save.
+                    scale=math.floor((q.frame-q.start)/180)%2==0 and 1 or 1.3
+                    t:set_position(Vector4f.new(q.position.x,q.position.y,q.position.z,1),false)
+                    t:set_rotation(Quaternion.new(.70710678,0,.70710678,0))
+                end
+                call(t,'set_LocalScale',Vector3f.new(scale,q.replay_scale and scale or .75,1))
+                if q.flash_probe then
+                    assert(call(q.mesh,'getMaterialVariableName',0,4)=='VFX_CommonRimEmissive_Color')
+                    assert(call(q.mesh,'getMaterialVariableName',0,23)=='VFX_CommonRimEmissive_Intensity')
+                    call(q.mesh,'setMaterialFloat4',0,4,Vector4f.new(1,1,1,1))
+                    call(q.mesh,'setMaterialFloat',0,23,scale>1 and 1 or 0)
+                    call(q.mesh,'setMaterialFloat',0,24,1)
+                    call(q.mesh,'setMaterialFloat',0,25,0)
+                end
+                if q.tint_probe then
+                    call(q.mesh,'setMaterialFloat4',0,0,Vector4f.new(1,.55,.55,1))
+                    if q.peer_mesh and call(q.peer_mesh,'get_MaterialReady')then
+                        local v=call(q.peer_mesh,'getMaterialFloat4',0,0)
+                        q.material_isolation={peer={x=v.x,y=v.y,z=v.z},isolated=math.abs(v.x-1)<.0001 and math.abs(v.y-1)<.0001 and math.abs(v.z-1)<.0001}
+                    end
+                end
+                q.motion_updates=q.motion_updates+1
+                if q.inspect_dynamic and q.frame%30==0 then
+                    q.transform_probe={requested={x=scale,y=q.replay_scale and scale or .75,z=1},
+                        local_scale=snapshot(call(t,'get_LocalScale'),2,{}),world_scale=snapshot(call(t,'get_Scale'),2,{}),
+                        world_matrix=snapshot(call(t,'get_WorldMatrix'),2,{}),
+                        tint=q.tint_probe and snapshot(call(q.mesh,'getMaterialFloat4',0,0),2,{})}
+                end
+            end
             if q.phase=='loading' then
                 if call(q.mesh,'get_MeshReady') and call(q.mesh,'get_MaterialReady') then
                     assert(call(q.mesh,'get_MaterialNum')==1,'Unexpected material count')
                     call(q.mesh,'set_Enabled',true);call(q.go,'set_DrawSelf',true)
                     q.phase=q.colliders and 'checking_collision' or 'visible';q.ready=not q.colliders;report()
+                    if q.tint_probe then
+                        q.peer_go=assert(sdk.find_type_definition('via.GameObject'):get_method('create(System.String, via.Folder)'):call(nil,q.name..'_untinted',q.folder)):add_ref()
+                        call(q.peer_go,'set_DrawSelf',false)
+                        q.peer_mesh=assert(call(q.peer_go,'createComponent(System.Type)',sdk.find_type_definition('via.render.Mesh'):get_runtime_type())):add_ref()
+                        call(q.peer_mesh,'set_Enabled',false);call(q.peer_mesh,'set_StaticMesh',false)
+                        call(q.peer_mesh,'setMesh',q.mesh_holder);call(q.peer_mesh,'set_Material',q.material_holder)
+                        call(q.peer_mesh,'set_RenderOutputID',31)
+                    end
+                    if q.inspect_dynamic then
+                        q.material_probe={variables={}}
+                        local n=call(q.mesh,'getMaterialVariableNum',0);assert(n<=256,'Material variable bound')
+                        for i=0,n-1 do
+                            local name=call(q.mesh,'getMaterialVariableName',0,i)
+                            local entry={index=i,name=name,type=call(q.mesh,'getMaterialVariableType',0,i)}
+                            if name=='BaseColor' then entry.value=snapshot(call(q.mesh,'getMaterialFloat4',0,i),2,{}) end
+                            q.material_probe.variables[#q.material_probe.variables+1]=entry
+                        end
+                        q.material_probe.metadata=state.metadata['via.Float4'];report()
+                    end
                 elseif q.frame-q.start>600 then error('Native resources did not become ready') end
             end
             if q.phase=='checking_collision' and q.frame-q.object_start>=6 and q.frame%30==0 then

@@ -494,7 +494,7 @@ public final class AvatarExporter implements SubmitNodeCollector {
 				v = AvatarExporter.this.atlas.itemV(v);
 			}
 			// Minecraft's red "hurt" flash is an overlay texture: tint instead. Its white flash
-			// (lit TNT about to go) glows instead.
+			// (lit TNT about to go) keeps its own flag through the native renderer.
 			if (((overlay >>> 16) & 0xFFFF) < 8) {
 				int r = (argb >> 16) & 0xFF, g = (int) (((argb >> 8) & 0xFF) * 0.55F), b = (int) ((argb & 0xFF) * 0.55F);
 				argb = (argb & 0xFF000000) | (r << 16) | (g << 8) | b;
@@ -510,7 +510,9 @@ public final class AvatarExporter implements SubmitNodeCollector {
 			this.data[o + 4] = Float.floatToRawIntBits(v);
 			this.data[o + 5] = argb;
 			this.data[o + 6] = ((light >> 4) & 0xF) | (((light >> 20) & 0xF) << 8);
-			this.data[o + 7] = this.flags;
+			// Onimusha v15 extension: keep white overlay separate from MC light.
+			// Bits 8..20 already belong to block ownership; bit21 is dynamic-only.
+			this.data[o + 7] = this.flags | ((overlay & 0xFFFF) >= 8 ? (1 << 21) : 0);
 			this.count++;
 		}
 
