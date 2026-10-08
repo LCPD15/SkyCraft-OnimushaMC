@@ -44,24 +44,55 @@ std::vector<AtlasRect> atlas_rects(const Mesh&m,const Texture&t) {
     return {unique.begin(),unique.end()};
 }
 bool overlaps(AtlasRect a,AtlasRect b){return a.x<b.x+b.w&&b.x<a.x+a.w&&a.y<b.y+b.h&&b.y<a.y+a.h;}
-NativeCube tagged_cube(const proto::RenVertex* v,SectionKey k){
-    const auto kind=(v[0].flags>>8)&255,face=(v[0].flags>>4)&7;
-    if(!kind||kind>16||!face||face>6)return {};
-    constexpr int normals[6][3]={{0,-1,0},{0,1,0},{0,0,-1},{0,0,1},{-1,0,0},{1,0,0}};
-    const auto*n=normals[face-1];double center[3]{};
-    for(int j=0;j<3;j++){
-        if(v[j].flags!=v[0].flags||(v[j].flags&2)||(v[j].color>>24)!=255)return {};
-        center[0]+=v[j].x/3.;center[1]+=v[j].y/3.;center[2]+=v[j].z/3.;
+}
+std::uint32_t RenderStore::register_model(Mesh model,std::uint32_t textureId){
+    const Texture*t=&atlas;if(textureId){auto it=textures.find(textureId);if(it==textures.end())return 0;t=&it->second;}
+    if(t->rgba.empty()||model.vertices.empty())return 0;
+    if(!textureId)for(auto a:animatedAtlasRects)for(auto r:atlas_rects(model,atlas))if(overlaps(a,r))return 0;
+    std::string bytes(reinterpret_cast<const char*>(model.vertices.data()),model.vertices.size()*sizeof(proto::RenVertex));
+    const auto texRevision=textureId?t->revision:atlasBaseRevision;
+    bytes.append(reinterpret_cast<const char*>(&textureId),sizeof(textureId));bytes.append(reinterpret_cast<const char*>(&texRevision),sizeof(texRevision));
+    auto found=modelKeys.find(bytes);if(found!=modelKeys.end())return found->second;
+    if(blockModels.size()>=4096||modelBytes+bytes.size()*2>64*1024*1024||nextModelId==UINT32_MAX)return 0;
+    const auto id=++nextModelId;modelBytes+=bytes.size()*2;model.nativeRevision=model.revision=id;
+    modelKeys.emplace(std::move(bytes),id);blockModels.emplace(id,std::move(model));modelTextures[id]=textureId;return id;
+}
+void RenderStore::register_models(Mesh&m,SectionKey k){
+    std::map<unsigned,std::vector<std::size_t>> cells;
+    m.nativeTriangles.assign(m.vertices.size()/3,{});
+    for(std::size_t i=0;i<m.vertices.size();i+=3){
+        const auto cell=m.vertices[i].flags>>8;
+        if(cell>=1&&cell<=4096)cells[cell].push_back(i);
     }
-    int local[3];for(int a=0;a<3;a++){local[a]=int(std::floor(center[a]-n[a]*.002));if(local[a]<0||local[a]>15)return {};}
-    for(int j=0;j<3;j++){const float pos[]={v[j].x,v[j].y,v[j].z};for(int a=0;a<3;a++){
-        if(pos[a]<local[a]-.001||pos[a]>local[a]+1.001)return {};
-        if(n[a]&&std::abs(pos[a]-(local[a]+(n[a]>0?1:0)))>.001)return {};
-    }}
-    return {k.x*16+local[0],k.y*16+local[1],k.z*16+local[2],kind};
+    for(const auto&[cell,triangles]:cells){
+        const int n=int(cell)-1,x=n&15,y=n>>8,z=(n>>4)&15;
+        Mesh model;bool valid=true;
+        for(auto i:triangles)for(int j=0;j<3;j++){
+            auto v=m.vertices[i+j];
+            if((v.flags>>8)!=cell||(v.flags&2)||(v.color>>24)!=255){valid=false;break;}
+            v.x=std::round((v.x-x-.5f)*4096)/4096;
+            v.y=std::round((v.y-y-.5f)*4096)/4096;
+            v.z=std::round((v.z-z-.5f)*4096)/4096;
+            if(std::abs(v.x)>4||std::abs(v.y)>4||std::abs(v.z)>4){valid=false;break;}
+            v.flags&=0xff;v.light=0;model.vertices.push_back(v);
+        }
+        if(!valid||model.vertices.empty()||model.vertices.size()>196608)continue;
+        const auto id=register_model(std::move(model),0);if(!id)continue;
+        for(auto i:triangles)m.nativeTriangles[i/3]={k.x*16+x,k.y*16+y,k.z*16+z,id};
+    }
 }
+void RenderStore::invalidate_native_views(){nativeViews.clear();instanceReceiptValid=false;instanceReceipts.clear();release_dynamic();}
+std::vector<NativeLight>RenderStore::nearby_lights(double x,double y,double z)const{
+    std::vector<std::pair<double,NativeLight>>near;
+    if(!cubeConnected||!cubeCleared)return {};
+    for(const auto&[k,rows]:lights)for(auto r:rows){
+        NativeLight l{k.x*16+r.x,k.y*16+r.y,k.z*16+r.z,r.color,r.level};
+        const double dx=l.x+.5-x,dy=l.y+.5-y,dz=l.z+.5-z,d=dx*dx+dy*dy+dz*dz;
+        if(d<=256)near.push_back({d,l});
+    }
+    std::sort(near.begin(),near.end(),[](auto&a,auto&b){return a.first<b.first;});if(near.size()>64)near.resize(64);
+    std::vector<NativeLight>out;for(auto&[d,l]:near)out.push_back(l);return out;
 }
-void RenderStore::invalidate_native_views(){nativeViews.clear();instanceReceiptValid=false;instanceReceipts.clear();}
 std::vector<NativeCube> RenderStore::nearby_instances(double x,double y,double z)const{
     std::set<NativeCube>unique;
     if(!cubeConnected||!cubeCleared)return {};
@@ -75,7 +106,7 @@ std::vector<NativeCube> RenderStore::nearby_instances(double x,double y,double z
 bool RenderStore::accept_instances(const std::vector<NativeCube>&rows,std::uint64_t now){
     if(rows.size()>1280||!cubeConnected||!cubeCleared)return false;
     std::set<NativeCube>ready(rows.begin(),rows.end());if(ready.size()!=rows.size())return false;
-    for(auto p:rows)if(!p.kind||p.kind>16)return false;
+    for(auto p:rows)if(!p.kind||!blockModels.contains(p.kind))return false;
     const std::vector<NativeCube>sorted(ready.begin(),ready.end());
     if(instanceReceiptValid&&instanceReceiptRevision==instanceRevision&&instanceReceipts==sorted){for(auto&[k,v]:nativeViews)v.expires=now+500;return true;}
     for(const auto&[k,m]:sections){
@@ -109,7 +140,8 @@ void RenderStore::clear() {
     for(const auto& [k,bits]:solids) for(int i=0;i<4096;i++) if(bits[i>>3]&(1u<<(i&7)))
         solidChanges.push_back({k.x*16+(i&15),k.y*16+(i>>8),k.z*16+((i>>4)&15),false});
     sections.clear();sectionAtlasRects.clear();invalidate_native_views();++instanceRevision;solids.clear(); fullCubes.clear();++cubeRevision;
-    avatar={}; scene={}; worldEntities={}; ++revision;
+    blockModels.clear();modelTextures.clear();modelKeys.clear();modelBytes=0;lights.clear();
+    avatar={}; scene={};hands={}; worldEntities={}; ++revision;
 }
 void RenderStore::set_cube_context(std::uint32_t world,std::uint32_t epoch,std::uint32_t pid,std::uint64_t generation,bool connected) {
     if(world!=cubeWorld||epoch!=cubeEpoch||pid!=cubePid||generation!=cubeGeneration||connected!=cubeConnected) {
@@ -147,7 +179,7 @@ bool RenderStore::consume(std::uint32_t type,std::span<const std::uint8_t> p) {
     case proto::kRenClearAll: if(p.empty()){clear();cubeCleared=cubeConnected;ok=true;} break;
     case proto::kRenAtlas: {
         proto::RenAtlas h; ok=read(p,h)&&texture(atlas,p,sizeof(h),h.width,h.height,rev);
-        if(ok){animatedAtlasRects.clear();invalidate_native_views();++instanceRevision;for(auto&[key,m]:sections){m.nativeRevision=rev;sectionAtlasRects[key]=atlas_rects(m,atlas);}}break;
+        if(ok){atlasBaseRevision=rev;blockModels.clear();modelTextures.clear();modelKeys.clear();modelBytes=0;animatedAtlasRects.clear();invalidate_native_views();++instanceRevision;for(auto&[key,m]:sections){m.nativeRevision=rev;register_models(m,key);sectionAtlasRects[key]=atlas_rects(m,atlas);}}break;
     }
     case proto::kRenTexture: {
         proto::RenTexture h;
@@ -165,7 +197,7 @@ bool RenderStore::consume(std::uint32_t type,std::span<const std::uint8_t> p) {
         // frames do not rebuild static geometry; the worker excludes every known animated rect.
         const bool discovered=std::find(animatedAtlasRects.begin(),animatedAtlasRects.end(),changed)==animatedAtlasRects.end();
         if(discovered){++instanceRevision;if(animatedAtlasRects.size()<512)animatedAtlasRects.push_back(changed);else animatedAtlasRects={{0,0,atlas.width,atlas.height}};
-            for(auto&[key,m]:sections)for(const auto&r:sectionAtlasRects[key])if(overlaps(r,changed)){m.nativeRevision=rev;nativeViews.erase(key);break;}}
+            for(auto&[key,m]:sections)for(const auto&r:sectionAtlasRects[key])if(overlaps(r,changed)){m.nativeRevision=rev;nativeViews.erase(key);register_models(m,key);break;}}
         ok=true; break;
     }
     case proto::kRenSection: {
@@ -176,15 +208,16 @@ bool RenderStore::consume(std::uint32_t type,std::span<const std::uint8_t> p) {
         if(h.vertexCount==0&&p.size()==sizeof(h)){sections.erase(k);sectionAtlasRects.erase(k);nativeViews.erase(k);ok=true;break;}
         if(!sections.contains(k)&&sections.size()>=kMaxSections) break;
         Mesh m; ok=mesh(m,p,sizeof(h),0,h.vertexCount,rev); if(ok){m.origin[0]=double(h.sx)*16;m.origin[1]=double(h.sy)*16;m.origin[2]=double(h.sz)*16;
-            m.nativeTriangles.reserve(m.vertices.size()/3);for(std::size_t i=0;i<m.vertices.size();i+=3)m.nativeTriangles.push_back(tagged_cube(m.vertices.data()+i,k));
+            register_models(m,k);
             sectionAtlasRects[k]=atlas_rects(m,atlas);nativeViews.erase(k);sections[k]=std::move(m);} break;
     }
     case proto::kRenAvatar: {
         proto::RenAvatar h; ok=read(p,h)&&mesh(avatar,p,sizeof(h),h.batchCount,h.vertexCount,rev); break;
     }
-    case proto::kRenScene: {
+    case proto::kRenScene: case proto::kRenHands: {
         proto::RenScene h; if(!read(p,h)||!std::isfinite(h.originX)||!std::isfinite(h.originY)||!std::isfinite(h.originZ))break;
-        ok=mesh(scene,p,sizeof(h),h.batchCount,h.vertexCount,rev);if(ok){scene.origin[0]=h.originX;scene.origin[1]=h.originY;scene.origin[2]=h.originZ;} break;
+        auto&target=type==proto::kRenHands?hands:scene;
+        ok=mesh(target,p,sizeof(h),h.batchCount,h.vertexCount,rev);if(ok){target.origin[0]=h.originX;target.origin[1]=h.originY;target.origin[2]=h.originZ;} break;
     }
     case proto::kRenSolids: {
         proto::RenSolids h; if(!read(p,h)||h.count>4096||p.size()!=sizeof(h)+(h.count?512:0))break;
@@ -213,8 +246,16 @@ bool RenderStore::consume(std::uint32_t type,std::span<const std::uint8_t> p) {
         if(h.count&&!fullCubes.contains(key)&&fullCubes.size()>=kMaxSections)break;
         if(h.count)fullCubes[key]=bits;else fullCubes.erase(key);++cubeRevision;ok=true;break;
     }
+    case proto::kRenLights:{
+        proto::RenLights h;if(!read(p,h)||h.count>4096||p.size()!=sizeof(h)+h.count*sizeof(proto::RenLight)
+          ||std::abs(std::int64_t(h.sx))>1000000||std::abs(std::int64_t(h.sy))>1000000||std::abs(std::int64_t(h.sz))>1000000)break;
+        SectionKey k{h.sx,h.sy,h.sz};if(!lights.contains(k)&&lights.size()>=kMaxSections)break;
+        std::vector<proto::RenLight>rows(h.count);if(h.count)std::memcpy(rows.data(),p.data()+sizeof(h),h.count*sizeof(proto::RenLight));
+        bool valid=true;std::set<unsigned>cells;for(auto r:rows)if(r.x>15||r.y>15||r.z>15||!r.level||r.level>15||!cells.insert(r.x+16*r.z+256*r.y).second)valid=false;
+        if(!valid)break;if(h.count)lights[k]=std::move(rows);else lights.erase(k);ok=true;break;
+    }
     // Native terrain destruction intentionally unsupported: original terrain is protected.
-    case proto::kRenDug: case proto::kRenRagdoll: case proto::kRenLights: ok=true;break;
+    case proto::kRenDug: case proto::kRenRagdoll: ok=true;break;
     default: break;
     }
     if(!ok)++invalidMessages;

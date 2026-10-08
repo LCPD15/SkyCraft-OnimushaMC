@@ -154,9 +154,10 @@ public final class WorldExporter {
 		nativeVanillaCubes = dev.skycraft.link.VanillaBlockResources.compatible(blockSources);
 		SkyCraft.LOG.info("Onimusha block asset sources: {}", blockSources.entrySet().stream()
 			.collect(java.util.stream.Collectors.toMap(e -> e.getKey(), e -> e.getValue().stream().distinct().toList())));
-		SkyCraft.LOG.info("Onimusha prebuilt cube resources: {} (selected packs {})", nativeVanillaCubes, minecraft.getResourcePackRepository().getSelectedIds());
-		boolean ao = minecraft.options.ambientOcclusion().get();
-		blockRenderer = new ModelBlockRenderer(ao, true, minecraft.getBlockColors());
+		SkyCraft.LOG.info("Onimusha automatic block models; vanilla source={} (selected packs {})", nativeVanillaCubes, minecraft.getResourcePackRepository().getSelectedIds());
+		// Complete local models make asset identity independent of adjacent blocks.
+		// Native scene lighting replaces MC AO; retain actual biome/material tint.
+		blockRenderer = new ModelBlockRenderer(false, false, minecraft.getBlockColors());
 		fluidRenderer = new FluidRenderer(minecraft.getModelManager().getFluidStateModelSet());
 		ByteBuffer header = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(atlas.width).putInt(atlas.height).flip();
 		boolean ok = SkyLink.writeRender(Proto.REN_ATLAS, header, atlas.pixels.duplicate().clear());
@@ -276,7 +277,7 @@ public final class WorldExporter {
 						}
 						if (state.getRenderShape() == RenderShape.MODEL) {
 							var model = Minecraft.getInstance().getModelManager().getBlockStateModelSet().get(state);
-							MESH.nativeKind = nativeVanillaCubes ? NativeBlockKinds.of(state) : 0;
+							MESH.nativeKind = (x + 16*z + 256*y) + 1;
 							blockRenderer.tesselateBlock(MESH, x, y, z, level, pos.immutable(), state, model, state.getSeed(pos));
 							MESH.nativeKind = 0;
 						}

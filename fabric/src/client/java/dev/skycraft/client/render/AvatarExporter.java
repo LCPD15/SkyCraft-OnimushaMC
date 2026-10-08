@@ -78,7 +78,7 @@ import org.jspecify.annotations.Nullable;
  * move, ...) and all particles) relative to a block near the camera. Arrows,
  * dropped items and thrown items have their own lighter path (WorldExporter). Render thread only.
  */
-final class AvatarExporter implements SubmitNodeCollector {
+public final class AvatarExporter implements SubmitNodeCollector {
 	// Vertex flags: cutout, full-detail texture, lit by its own faces / without a normal / blended.
 	private static final int SOLID = 1 | 8 | (7 << 4);
 	private static final int PARTICLE = 1 | 8;
@@ -102,6 +102,8 @@ final class AvatarExporter implements SubmitNodeCollector {
 	private static final AvatarExporter AVATAR = new AvatarExporter();
 	private static final AvatarExporter SCENE = new AvatarExporter();
 	private static final AvatarExporter RAGDOLL = new AvatarExporter();
+	private static final AvatarExporter HANDS = new AvatarExporter();
+	private static long lastHandsFrame;
 	private static long nextRagdollNanos;
 
 	private final Map<Long, Batch> batches = new HashMap<>();
@@ -122,11 +124,15 @@ final class AvatarExporter implements SubmitNodeCollector {
 		AVATAR.shown = false;
 		SCENE.shown = false;
 		RAGDOLL.shown = false;
+		HANDS.shown = false;
+		lastHandsFrame=0;
 		nextRagdollNanos = 0;
 		movingBlocks = null;
 	}
 
 	static void frame(Minecraft minecraft, SkyAtlas atlas, float partialTick) {
+		HANDS.atlas=atlas;
+		if(minecraft.gameRenderer.mainCamera().isDetached() || System.nanoTime()-lastHandsFrame>250_000_000L) HANDS.sendEmpty(Proto.REN_HANDS,true);
 		AVATAR.exportAvatar(minecraft, atlas, partialTick);
 		SCENE.exportScene(minecraft, atlas, partialTick);
 		long now = System.nanoTime();
@@ -137,6 +143,24 @@ final class AvatarExporter implements SubmitNodeCollector {
 	}
 
 	// ---- the two captures -------------------------------------------------------------------------
+	/** Capture the exact vanilla hand pose before its GUI pass; same view, corrected hand FOV. */
+	public static boolean captureHands(net.minecraft.client.renderer.FirstPersonHandsAndItemsRenderer renderer,
+		float partial,PoseStack pose,net.minecraft.client.renderer.state.level.PlayerRenderState player,
+		net.minecraft.client.renderer.state.level.FirstPersonHandsAndItemsRenderState hands) {
+		if(!dev.skycraft.client.SkyClient.linked() || HANDS.atlas==null) return false;
+		var mc=Minecraft.getInstance();var camera=mc.gameRenderer.mainCamera();
+		var state=mc.gameRenderer.gameRenderState().levelRenderState.cameraRenderState;
+		try {
+			HANDS.begin();HANDS.offX=HANDS.offY=HANDS.offZ=0;
+			float ratio=(float)(Math.tan(Math.toRadians(camera.getFov())*.5)/Math.tan(Math.toRadians(state.hudFov)*.5));
+			if(!Float.isFinite(ratio)||ratio<.1||ratio>10) return false;
+			var corrected=new PoseStack();
+			corrected.mulPose(new Matrix4f(state.viewRotationMatrix).invert().scale(ratio,ratio,1).mul(state.viewRotationMatrix).mul(pose.last().pose()));
+			renderer.submitHandsWithItems(partial,corrected,HANDS,player,hands);
+			HANDS.send(Proto.REN_HANDS,new double[]{state.pos.x,state.pos.y,state.pos.z});lastHandsFrame=System.nanoTime();
+			return (dev.skycraft.client.SkyClient.sky().flags & Proto.SKY_NATIVE_HANDS_READY)!=0;
+		} catch(RuntimeException e) {SkyCraft.LOG.warn("OnimushaMC: hand capture retained vanilla drawing",e);return false;}
+	}
 
 	private void exportAvatar(Minecraft minecraft, SkyAtlas atlas, float partialTick) {
 		this.atlas = atlas;

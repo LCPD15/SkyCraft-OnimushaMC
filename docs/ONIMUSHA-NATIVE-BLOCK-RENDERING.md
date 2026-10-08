@@ -1,5 +1,8 @@
 # 原生方块绘制候选 / Native block rendering candidate
 
+> 这是 protocol 14 的历史说明。2026-10-08 11:47 已安装 protocol 15 自动转换候选，
+> 当前实现与待验收项见 [自动模型转换](ONIMUSHA-AUTOMATIC-MODELS.md)。下文白名单、协议与运行状态不再代表当前安装。
+
 2026-10-08。仅适用于 OnimushaWotS 01.000.001 / TDB82，REFramework
 `b6baf6b406efc65e077b99cb4d9ad25b0a0a9095`。不能直接套用到别的 RE 游戏。
 

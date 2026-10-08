@@ -13,7 +13,7 @@
 namespace skycraft::proto
 {
 	inline constexpr std::uint32_t kMagic = 0x43594B53;  // "SKYC"
-	inline constexpr std::uint32_t kVersion = 14;
+	inline constexpr std::uint32_t kVersion = 15;
 	inline constexpr wchar_t       kMappingName[] = L"Local\\OnimushaMC_v1";
 
 	// 1 Minecraft block == 70 Skyrim units (Skyrim player ~128 units tall, MC player 1.8 blocks).
@@ -64,6 +64,7 @@ namespace skycraft::proto
 		kSkyNativeTerrainProtected = 1u << 5, // native terrain is never mined; MC blocks remain breakable
 		kSkyMcLook = 1u << 6,             // MC owns yaw/pitch, rather than copying host look each frame
 		kSkyNativeExplosions = 1u << 7,   // captured native shell factory is ready for collisionEpoch
+		kSkyNativeHandsReady = 1u << 8,  // current first-person hands fully drawn by native RE meshes
 	};
 
 	// Skyrim's water (lakes, rivers, the sea) around the player, for Minecraft to treat as its own
@@ -369,6 +370,7 @@ namespace skycraft::proto
 		kRenDug = 11,         // RenDug + 512-byte bitset (bit x + 16z + 256y): which blocks of a section
 		                      // were dug out of Skyrim's world (its geometry there is gone); 0 = none
 		kRenFullCubes = 12,   // Onimusha: exact unit-cube collision shapes, context-tagged section replacement.
+		kRenHands = 13,       // RenScene layout: camera-relative posed first-person hands, absolute MC origin.
 		kRenRagdoll = 9,      // RenAvatar + RenBatch[] + RenVertex[]: the player's body standing still,
 		                      // relative to the feet and facing +Z, split into its parts (RenBatch
 		                      // flags bits 8-11: RagdollPart). Sent about once a second while alive;
@@ -522,7 +524,7 @@ namespace skycraft::proto
 		std::uint32_t light;    // low byte: block light 0-15, next byte: sky light 0-15
 		std::uint32_t flags;    // bit0: cutout (alpha test), bit1: translucent,
 		                        // bits 4-6: face normal as MC Direction ordinal + 1 (0 = none: lit without a normal)
-		                        // v14 bits 8-15: Onimusha prebuilt vanilla cube kind 1..16 (0 = overlay only).
+		                        // v15 bits 8-20: owning block cell (x+16z+256y)+1, 0 = unowned/fluid.
 	};
 	static_assert(sizeof(RenVertex) == 32);
 

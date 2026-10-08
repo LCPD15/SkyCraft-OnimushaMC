@@ -217,7 +217,17 @@ public class SkyrimActorEntity extends LivingEntity {
 
 	@Override
 	public boolean canBeCollidedWith(@Nullable Entity other) {
-		return false;
+		// The proxy never owns/moves its RE actor. Its current-session volume does
+		// stop the MC player walking through that actor, with vanilla collision sliding.
+		return other instanceof net.minecraft.world.entity.player.Player
+			&& hasHostSession() && dev.skycraft.link.SkyLink.active()
+			&& belongsTo(new ActorProxyIdentity.Session(dev.skycraft.link.SkyLink.generation(),
+				currentEpoch()));
+	}
+
+	private static int currentEpoch() {
+		var host=new dev.skycraft.link.SkyLink.SkyState();
+		return dev.skycraft.link.SkyLink.readSkyState(host) ? host.collisionEpoch : -1;
 	}
 
 	@Override

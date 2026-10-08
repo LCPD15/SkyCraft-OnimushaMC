@@ -16,6 +16,7 @@
     "LevelRendererMixin",
     "MinecraftDigMixin",
     "MinecraftMixin",
+    "NativeHandsMixin",
     "RenderSetupAccessor",
     "RenderTypeAccessor",
     "ScreenMixin",

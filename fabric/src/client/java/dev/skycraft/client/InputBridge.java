@@ -6,6 +6,7 @@ import dev.skycraft.link.GuiCursor;
 import dev.skycraft.link.SkyLink;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.PauseScreen;
+import net.minecraft.client.gui.screens.ChatScreen;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonInfo;
@@ -23,6 +24,8 @@ public final class InputBridge {
 	private static int modifiers;
 	private static int clickLogs;
 	private static int cursorLogs;
+	private static int chatOpeningCharacter;
+	private static long chatOpenedAt;
 
 	private InputBridge() {
 	}
@@ -96,6 +99,10 @@ public final class InputBridge {
 				}
 			}
 			case Proto.IN_TEXT -> {
+				boolean opening = chatOpeningCharacter != 0 && System.nanoTime()-chatOpenedAt<300_000_000L
+					&& Character.toLowerCase(a)==chatOpeningCharacter;
+				chatOpeningCharacter=0;
+				if(opening) break;
 				if (minecraft.gui.screen() != null) {
 					minecraft.keyboardHandler.textInput(handle, new String(Character.toChars(a)));
 				}
@@ -146,6 +153,15 @@ public final class InputBridge {
 			return;
 		}
 		boolean wasDown = KEYS[scancode];
+		// Explicit local chat entry: hidden-window focus must not keep vanilla's queued
+		// key mapping from opening it. Commands still use the world's actual permissions.
+		if (down && !wasDown && (scancode == 23 || scancode == 56)
+			&& minecraft.gui.screen() == null && minecraft.player != null && minecraft.isLocalServer()) {
+			releaseAll();
+			minecraft.gui.setScreen(new ChatScreen(scancode == 56 ? "/" : "", false));
+			chatOpeningCharacter=scancode==56 ? '/' : 't';chatOpenedAt=System.nanoTime();
+			return;
+		}
 		KEYS[scancode] = down;
 		updateModifiers();
 		int action = down ? (wasDown ? -1 : 1) : 0; // -1 = repeat

@@ -52,7 +52,7 @@ std::map<std::uint32_t,GpuTexture> textures;
 std::map<SectionKey,GpuMesh> sections;
 std::map<SectionKey,GpuMesh> nativeDepth;
 GpuTexture atlas, hud;
-GpuMesh avatar, scene, terrain, blendedWorld;
+GpuMesh avatar, scene, terrain, blendedWorld, nativeAvatarDepth,nativeSceneDepth,nativeHandsDepth;
 UINT width{},height{};
 bool failed{};
 bool guiCursorKnown{};
@@ -314,7 +314,7 @@ bool prepare() {
 }
 void reset() {
     if(context){context->ClearState();context->Flush();}
-    terrain={};avatar={};scene={};blendedWorld={};atlas={};hud={};textures.clear();sections.clear();nativeDepth.clear();targets.clear();
+    terrain={};avatar={};scene={};blendedWorld={};nativeAvatarDepth={};nativeSceneDepth={};nativeHandsDepth={};atlas={};hud={};textures.clear();sections.clear();nativeDepth.clear();targets.clear();
     depthView.Reset();depthTexture.Reset();worldVs.Reset();worldPs.Reset();overlayVs.Reset();overlayPs.Reset();layout.Reset();paramsBuffer.Reset();sampler.Reset();raster.Reset();depthWrite.Reset();depthRead.Reset();depthOff.Reset();solidBlend.Reset();straightAlpha.Reset();premultiplied.Reset();colorOff.Reset();
     interop.Reset();context.Reset();device.Reset();swapchain.Reset();width=height=0;lastHud=lastTerrain=blendedRevision=0;failed=false;
 }
@@ -356,7 +356,8 @@ void render(const RenderStore& store,const OverlayFrame& overlay,const proto::Mc
     const auto nativeLeaseNow=GetTickCount64();
     // RE draws native blocks before Present. Preserve their exact opaque geometry in
     // the private depth prepass so overlay avatars/items/glass cannot draw through them.
-    context->OMSetBlendState(colorOff.Get(),nullptr,~0u);context->PSSetShader(nullptr,nullptr,0);
+    context->OMSetBlendState(colorOff.Get(),nullptr,~0u);context->PSSetShader(worldPs.Get(),nullptr,0);
+    auto* nativeAtlas=atlas.srv.Get();context->PSSetShaderResources(0,1,&nativeAtlas);
     for(const auto&[key,view]:store.nativeViews){
         const auto src=store.sections.find(key);
         if(src==store.sections.end()||view.sourceRevision!=src->second.nativeRevision||nativeLeaseNow>=view.expires)continue;
@@ -366,6 +367,12 @@ void render(const RenderStore& store,const OverlayFrame& overlay,const proto::Mc
         context->Draw(static_cast<UINT>(view.depth.vertices.size()),0);
     }
     for(auto it=nativeDepth.begin();it!=nativeDepth.end();)if(!store.nativeViews.contains(it->first))it=nativeDepth.erase(it);else++it;
+    const bool sceneNative=store.nativeScene.remainder.nativeRevision==store.scene.revision&&store.nativeScene.expires>nativeLeaseNow;
+    const bool avatarNative=store.nativeAvatar.remainder.nativeRevision==store.avatar.revision&&store.nativeAvatar.expires>nativeLeaseNow;
+    std::vector<BlendedDraw> noBlended;
+    if(sceneNative)drawSolidMesh(store.nativeScene.depth,nativeSceneDepth,origin,p,noBlended);
+    if(avatarNative&&mc.cameraMode!=0){double feet[]={mc.x,mc.y,mc.z};drawSolidMesh(store.nativeAvatar.depth,nativeAvatarDepth,origin,p,noBlended,feet);}
+    if(mc.cameraMode==0&&store.hands_ready(nativeLeaseNow))drawSolidMesh(store.nativeHands.depth,nativeHandsDepth,origin,p,noBlended);
     context->PSSetShader(worldPs.Get(),nullptr,0);
     // All opaque/cutout geometry precedes every translucent triangle, across
     // sections, scene entities and the third-person avatar.
@@ -373,8 +380,8 @@ void render(const RenderStore& store,const OverlayFrame& overlay,const proto::Mc
     std::vector<BlendedDraw> blended;
     for(const auto& [key,m]:store.sections)drawSolidMesh(store.section_overlay(key,m,nativeLeaseNow),sections[key],origin,p,blended);
     for(auto it=sections.begin();it!=sections.end();)if(!store.sections.contains(it->first))it=sections.erase(it);else++it;
-    drawSolidMesh(store.scene,scene,origin,p,blended);
-    if(mc.cameraMode!=0){double feet[]={mc.x,mc.y,mc.z};drawSolidMesh(store.avatar,avatar,origin,p,blended,feet);}
+    drawSolidMesh(sceneNative?store.nativeScene.remainder:store.scene,scene,origin,p,blended);
+    if(mc.cameraMode!=0){double feet[]={mc.x,mc.y,mc.z};drawSolidMesh(avatarNative?store.nativeAvatar.remainder:store.avatar,avatar,origin,p,blended,feet);}
     drawBlended(blended,p);
     if(overlay.frameId&&texture(hud,overlay.width,overlay.height,overlay.rgba,overlay.frameId)) {
         context->OMSetDepthStencilState(depthOff.Get(),0);context->OMSetBlendState(premultiplied.Get(),nullptr,~0u);

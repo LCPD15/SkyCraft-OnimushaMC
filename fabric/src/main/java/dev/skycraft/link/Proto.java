@@ -8,7 +8,7 @@ public final class Proto {
 	}
 
 	public static final int MAGIC = 0x43594B53;
-	public static final int VERSION = 14;
+	public static final int VERSION = 15;
 	// A second client on the same PC (multiplayer testing) talks to its own stand-in Skyrim:
 	// -Dskycraft.link=Local\SkyCraft_guest (see tools/fake_guest.py).
 	public static final String MAPPING_NAME = System.getProperty("onimusha.link", "Local\\OnimushaMC_v1");
@@ -128,6 +128,7 @@ public final class Proto {
 	public static final int REN_TEXTURE = 4;
 	public static final int REN_AVATAR = 5;
 	public static final int REN_SCENE = 6;
+	public static final int REN_HANDS = 13;
 	public static final int REN_ATLAS_REGION = 7;
 	public static final int REN_LIGHTS = 8;
 	public static final int REN_RAGDOLL = 9;
@@ -175,6 +176,7 @@ public final class Proto {
 	public static final int SKY_MC_LOOK = 1 << 6;
 	/** Onimusha has resolved the captured native oil-barrel shell factory for this epoch. */
 	public static final int SKY_NATIVE_EXPLOSIONS = 1 << 7;
+	public static final int SKY_NATIVE_HANDS_READY = 1 << 8;
 
 	// McState (relative to OFF_MC_STATE)
 	public static final long MS_SEQ = 0x00;

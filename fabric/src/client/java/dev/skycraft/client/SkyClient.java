@@ -201,6 +201,7 @@ public final class SkyClient {
 		SkyDigClient.tick(minecraft);
 		freezeWhileUnlinked(minecraft);
 		holdUntilReady(minecraft);
+		if(linked && holdPos==null && sky.inGame() && !sky.loading() && !sky.menuOpen()) ActorContact.tick(minecraft);
 		publishTick(minecraft);
 	}
 

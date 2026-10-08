@@ -113,6 +113,27 @@ void direction_gpu_test(Gpu& gpu){
     check(rightRed>100&&leftBlue>100&&!leftRed&&!rightBlue,"actual fallback GPU WorldVS pixels place MC right red on screen-right and MC left blue on screen-left");
     check(green==0,"actual fallback GPU RH projection clips geometry behind the camera");
 }
+void dynamic_gpu_test(Gpu&gpu){
+    // Match consume(): store revision already includes every uploaded source mesh.
+    RenderStore store;store.revision=90010;store.atlas={1,1,{255,255,255,255},90000};store.atlasBaseRevision=90000;
+    store.textures[1]={1,1,{0,0,255,255},90001};store.textures[2]={1,1,{0,255,0,255},90001};
+    const float x[]={-.6f,.6f,.6f,-.6f},y[]={-.6f,-.6f,.6f,.6f};
+    for(int i:{0,1,2,0,2,3})store.scene.vertices.push_back({x[i],y[i],.3f,float(i==1||i==2),float(i>=2),0xffffffff,0x0f00,0x79});
+    store.scene.batches={{1,0,6,0}};store.scene.revision=90001;
+    store.avatar=store.scene;store.avatar.revision=90002;store.avatar.batches={{2,0,6,0}};for(auto&v:store.avatar.vertices)v.z=.7f;
+    store.prepare_dynamic();check(store.nativeScene.faces.size()==1,"GPU fixture contains one recognized entity face");
+    store.accept_dynamic(0,{{0,store.nativeScene.faces[0].model}},GetTickCount64());store.partition_dynamic(store.scene,store.nativeScene,GetTickCount64());
+    CameraState camera{};camera.valid=true;camera.viewProj[0]=camera.viewProj[5]=camera.viewProj[10]=camera.viewProj[15]=1;
+    proto::McState mc{};mc.flags=proto::kMcInWorld;mc.cameraMode=1;unsigned w{},h{};
+    gpu.clear();renderer::render(store,{},mc,camera);auto pixels=gpu.readback(w,h);auto*p=pixels.data()+(std::size_t(h/2)*w+w/2)*4;
+    check(p[0]<5&&p[1]<5&&p[2]<5,"native entity face hides duplicate MC color while depth-occluding other MC entities");
+    store.textures[1].rgba[3]=0;store.textures[1].revision=90003;
+    gpu.clear();renderer::render(store,{},mc,camera);pixels=gpu.readback(w,h);p=pixels.data()+(std::size_t(h/2)*w+w/2)*4;
+    check(p[1]>240&&p[2]<5,"native entity private depth samples its own texture and preserves cutout holes");
+    store.release_dynamic();store.textures[1].rgba[3]=255;store.textures[1].revision=90004;
+    gpu.clear();renderer::render(store,{},mc,camera);pixels=gpu.readback(w,h);p=pixels.data()+(std::size_t(h/2)*w+w/2)*4;
+    check(p[2]>240&&p[1]<5,"release restores source entity drawing without stale GPU ownership");
+}
 void transparency_gpu_tests(Gpu& gpu){
     RenderStore store;store.atlas={1,1,{255,255,255,255},101};
     proto::McState mc{};mc.flags=proto::kMcInWorld;mc.fovDeg=70;
@@ -182,6 +203,11 @@ int main(){
         store.scene=mesh;store.scene.revision=20;for(auto&v:store.scene.vertices){v.z=.7f;v.color=0xff00ff00;}
         gpu.clear();renderer::render(store,hud,mc,camera);image=gpu.readback(w,h);nativeHidden=image.data()+(std::size_t(h*5/8)*w+w/2)*4;
         check(nativeHidden[1]<10,"native-owned geometry still depth-occludes overlay MC entities");
+        store.atlas.rgba.assign(16,255);for(int i=0;i<4;i++)store.atlas.rgba[i*4+3]=0;store.atlas.revision=1000;
+        store.textures[1]={1,1,{0,255,0,255},1000};store.scene.batches={{1,0,3,0}};store.scene.revision=21;
+        gpu.clear();renderer::render(store,{},mc,camera);image=gpu.readback(w,h);nativeHidden=image.data()+(std::size_t(h*5/8)*w+w/2)*4;
+        check(nativeHidden[1]>200,"native cutout holes do not occlude MC entities in private depth");
+        store.atlas.rgba.clear();for(int i=0;i<4;i++)store.atlas.rgba.insert(store.atlas.rgba.end(),{255,0,0,255});store.atlas.revision=1001;
         store.scene={};store.invalidate_native_views();gpu.clear();renderer::render(store,hud,mc,camera);image=gpu.readback(w,h);inspect(image,w,h,"native receipt released");
         proto::ColTri blocker{};for(int i=0;i<3;i++){blocker.v[i*3]=mesh.vertices[i].x;blocker.v[i*3+1]=mesh.vertices[i].y;blocker.v[i*3+2]=0.25f;}store.collisionTriangles={blocker};store.collisionRevision=1;
         gpu.clear();renderer::render(store,hud,mc,camera);image=gpu.readback(w,h);const auto* occluded=image.data()+(std::size_t(h*5/8)*w+w/2)*4;check(occluded[0]<10&&occluded[1]<10&&occluded[2]<10,"original-world collider depth occludes MC mesh");
@@ -197,6 +223,7 @@ int main(){
         check(arrow[0]<10&&arrow[1]<10&&arrow[2]<10,"focus/GUI cursor reset removes stale arrow");
         direction_gpu_test(gpu);
         transparency_gpu_tests(gpu);
+        dynamic_gpu_test(gpu);
         mc.flags&=~proto::kMcScreenOpen;store.sections[{0,0,0}]=mesh;
         renderer::reset();check(!renderer::ready(),"device reset revokes renderer readiness");gpu.wait();require(gpu.swap->ResizeBuffers(2,400,300,DXGI_FORMAT_R8G8B8A8_UNORM,0),"resize after renderer reset");hud.frameId=2;gpu.clear();renderer::initialize(&p);check(renderer::prepare()&&renderer::ready(),"GPU readiness restored after resize");renderer::render(store,hud,mc,camera);image=gpu.readback(w,h);check(w==400&&h==300,"resize released all wrapped backbuffers");inspect(image,w,h,"resized");renderer::reset();gpu.wait();
         printf("%u failure(s), hidden D3D12 WARP smoke test\n",failures);return failures?1:0;

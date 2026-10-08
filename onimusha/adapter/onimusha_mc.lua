@@ -1928,6 +1928,17 @@ local function install_hooks()
     if cfg.runtime_stage=="C" then install_camera_observation_hooks() end
     if state.control_hooks_attempted then return end
     state.control_hooks_attempted=true
+    -- Camera-distance dither only. Death/stealth/material transparency keep their own logic.
+    local dither=td('app.mcCamSys_DitherDepth')
+    local dither_method=dither and dither:get_method('isDitherEnableCamera(ace.CameraControllerBase)')
+    if dither_method then
+        state.hooks.camera_dither={attempted=true,calls=0,suppressed=0}
+        sdk.hook(dither_method,function()end,function(retval)
+            local r=state.hooks.camera_dither;r.calls=r.calls+1
+            if state.active then r.suppressed=r.suppressed+1;return sdk.to_ptr(0) end
+            return retval
+        end)
+    end
     local base=td("app.CharacterBase")
     local motion=base and base:get_method("evMotionRootApply(via.vec3, via.Quaternion)")
     if motion then
