@@ -5,6 +5,72 @@
 
 ## 最新结果与下一步
 
+### 22:49 方块光照、放拆、约30米显示与 F10 恢复实景通过
+
+用户追加确认：放置/拆除时其他方块不再全体闪回，约30米仍保持鬼武者光照；
+随后 F10 关闭，原角色和操作恢复正常。`userdata-live-success/restored-f10-off.json`：
+active=false，显示对象创建229/移除229，owned_total=0、warm_retiring=0，
+碰撞count=0/retiring=0，无资源错误。当前游戏/MC/worker仍运行，接管已关闭。
+78项部署哈希仍一致。无需再让用户重复本轮方块测试。
+
+下一项为玩家、手持物、NPC、活动TNT的原生绘制；当前开关仍false。
+先以已通过的引擎依赖加载方式做少量动态资源/实例验证与数量控制，
+不要恢复直接 create_resource/create_holder 或定时重绑，不要一次开启大量动态面。
+本轮成功只覆盖上述方块场景，不能宣称动态实体、所有模型或长时间稳定性已验证。
+
+### 22:45 接管中的方块首次光照结果
+
+用户确认：方块正常，新创建方块响应鬼武者光照的时间明显缩短。
+实景记录 `logs/native-lighting-crash-20261008-211723/userdata-live-success/`：
+11/11 方块就绪、6 种外观加载完成、无资源错误/等待项、11 个存活对象、无延迟销毁积压。
+热更新后 REF 日志没有新增 error 或 setMesh 异常。下述候选的首次接管加载已通过，
+放拆、约30米与退出接管的后续验收见22:49记录；长时间稳定性仍需区别记录。
+
+### 22:39 引擎依赖加载候选热更新记录
+
+**本节取代以下旧停点，禁止恢复定时 holder 重绑或隐藏组件重建。**
+用户确认恢复版仍会十几秒后只有部分方块受光，新增方块让全部方块恢复 MC 效果。
+21:40:04 日志再次捕获 `Mesh.setMesh` 原生访问异常；用户随后安全关闭 F10，原角色正常。
+先关闭自动原生绘制并保存现场，再完成下述单对象对照，没有再要求用户反复放方块。
+
+证据：`logs/native-lighting-crash-20261008-211723/` 中 recovery-block-exception、
+mesh-binding-disassembly、resource-refcount-disassembly、global-holder-probe。
+异常指令位于资源 add_ref 的 `lock inc [rcx+0x28]`；rcx 为模块 vtable 地址，
+setMesh 从 holder+0x10 获取了不适合作为资源对象的指针。确切失效生命周期仍未证明；
+不得声称仅靠引用计数或更换 create_holder_global 已解决。
+`create_holder_global` 对照：新 Mesh/MDF 首次超时，同资源第二次才就绪。
+
+新路径由引擎反序列化私有 USER3 的 `_Mesh` / `_Material` 依赖。
+根类型 `app.montage.data.MontagePartsModelData` 仅作为数据容器；未挂接玩家、未调用换装逻辑，
+其他字段为空。4 个全新资源 ID 首次加载成功，后三个从请求到就绪分别约 1.010、0.102、1.112 秒，
+每次撤除均确认 destroyed，无新增 setMesh 异常。这是单立方体试验，不是所有模型/大批量稳定性保证。
+首个样本 `section_c8a249840581409cab79`；其余结果见
+`global-holder-probe/userdata-cold-series/summary.json`。
+
+自动转换接入内容：
+- `NativeModelLoader` 用 REE-Lib 生成并回读 896 字节 USER3 模板。Python 只替换等长 ID，
+  输出与 4 份独立 C# 生成文件逐字节相同，不需每个模型启动子进程。
+- worker 为新旧转换资源都发布 `_loader.user.3`，结果新增 `loader_version=1`。
+  旧资源只补依赖文件和回执，不改写已缓存的 Mesh/MDF/TEX。
+- Lua 等待引擎生成的两个 holder 后才创建隐藏 Mesh；每组件仅绑定一次，取消定时重绑和超时重建。
+  保留 USER3 / holder 直到对应显示对象与延迟销毁对象释放。
+- 单类型加载/绑定失败仅让该类型保留 MC 绘制，已有成功方块的回执不清空。
+- 动态原生绘制仍硬关闭；不能把人物、手持物、NPC、活动 TNT 说成已修复。
+
+当前游戏 PID82956，MC PID101676，worker PID114264；原世界不变，存档本轮未编辑。
+已安装备份 `runtime/test-backups/engine-resource-loader-20261008-223922`；78 项部署哈希一致。
+models Lua `BACD3FA942E2B1812B7ACBF4076CD685B4DF92AE8375445E1207C85DD2CD7EC7`；
+combat probe Lua `91EEF74425983E31393C73CA8CD18B71213EAB6FAD18F4F41D12D022581E041F`。
+DLL/JAR 未改。热更新 generation4 已 loaded；接管关闭，自动方块绘制配置恢复 true，独立探针关闭并已撤除。
+worker 当前 4 个既有转换回执均升级成功；额外 4 个真实模型输入的 Blender 转换/文件哈希检查通过。
+
+定向检查：共享资源与恢复、加载并发/暂停、单次绑定、单类失败隔离、动态禁用、动态离线模拟、
+独立物理/显示探针及 USER3 探针通过；模板与 worker IO 单元测试通过。
+这些与单方块实景记录是不同证据，不能替代下一步的接管实测。
+
+首次 F10 测试用户已通过，详见上面的22:45状态。
+无需重启或手动 Reset。不要自行开启接管，不要重新启用动态面批量绘制。
+
 ### 21:32 崩溃后隔离动态原生绘制，已安装恢复候选，等待启动
 
 **本节取代以下旧停点。不要再次部署 21:16 的组件重建版本。**

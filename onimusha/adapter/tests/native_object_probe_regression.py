@@ -104,7 +104,7 @@ sdk={get_tdb_version=function() return 82 end,get_managed_singleton=function(t) 
   return obj(t,methods)
  end,
  create_resource=function(t,p) resources[#resources+1]=p;return {add_ref=function() end,release=function() end,
-  create_holder=function() return obj('holder',{}) end} end,
+  create_holder_global=function() return obj('holder',{}) end} end,
  find_type_definition=function(t) return {get_runtime_type=function() return t end,get_method=function(_,m)
   if t=='via.GameObject' and m=='create(System.String, via.Folder)' then
    return {call=function(_,_,name,f) assert(f==folder);render_creates=render_creates+1;valid=true;return go end}

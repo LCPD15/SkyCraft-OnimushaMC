@@ -1,4 +1,4 @@
-"""Cold resources must progress without pauses spending their retry budget."""
+"""Cold resources are bounded; pause time and one broken kind don't revoke good blocks."""
 from pathlib import Path
 source=Path(__file__).with_name('native_models_regression.py').read_text(encoding='utf-8')
 exec(source.rsplit("lua.execute((Path",1)[0])
@@ -27,11 +27,16 @@ assert(created==8 and destroyed==0 and next(onimusha_native_sections.status().re
 paused=false;sample.foreground=false;advance(700)
 assert(created==8 and destroyed==0)
 print('PASS at most eight hidden cold resources load; menu and background time do not consume timeout')
-sample.foreground=true;advance(600)
-assert(destroyed>=8 and next(onimusha_native_sections.status().resource_errors)==nil)
-loaded=true;advance(180)
+sample.foreground=true;loaded=true;advance(180)
 assert(#ack_rows==20 and onimusha_native_sections.status().resources_loading==0)
-print('PASS cold-load timeout retries and all twenty appearances eventually become ready')
+print('PASS all twenty engine-owned appearances become ready without a timed rebind')
+local before=captures;local releases_before=released
+loaded=false;sample.cubes[21]={x=21,y=2,z=3,kind=121};advance(680)
+assert(#ack_rows==20 and not onimusha_native_sections.status().error)
+assert(onimusha_native_sections.status().resource_errors['121'] and captures==before+1)
+assert(released==releases_before)
+advance(680);assert(#ack_rows==20 and captures==before+1)
+print('PASS one cold-load timeout preserves every existing receipt and does not loop rebind/rebuild')
 onimusha_native_sections.stop();advance(15,false)
 assert(not onimusha_native_sections.busy())
 ''')

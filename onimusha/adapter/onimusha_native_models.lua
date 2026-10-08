@@ -29,17 +29,6 @@ local function read_json(path)
     return json.load_file(path)
 end
 local function key(p) return p.x..':'..p.y..':'..p.z end
-local function holder(rt,ht,path)
-    local r=pin(sdk.create_resource(rt,path));local ok,h=pcall(function()return pin(r:create_holder(ht))end);r:release()
-    if not ok then error(h) end;return h
-end
-local function refresh_holders(r)
-    local prefix='mod/onimusha_mc/sections/'..r.asset..'/'..r.asset
-    -- Reacquire holders for the existing hidden component. This path restored
-    -- blocks in game; the underlying cold-load failure is not yet explained.
-    r.mesh=holder('via.render.MeshResource','via.render.MeshResourceHolder',prefix..'.mesh')
-    r.material=holder('via.render.MeshMaterialResource','via.render.MeshMaterialResourceHolder',prefix..'.mdf2')
-end
 local function retire_warmer(r)
     if not r.go then return end
     if call(r.go,'get_Valid') then
@@ -47,8 +36,44 @@ local function retire_warmer(r)
         call(r.go,'set_DrawSelf',false)
         sdk.find_type_definition('via.GameObject'):get_method('destroy(via.GameObject)'):call(nil,r.go)
     end
-    q.warm_retired[#q.warm_retired+1]={go=r.go,mesh=r.warm_mesh,frame=q.frame}
+    -- Keep the engine-owned dependency graph through deferred destruction,
+    -- including reset/error paths which discard the active resource cache.
+    q.warm_retired[#q.warm_retired+1]={go=r.go,mesh=r.warm_mesh,frame=q.frame,
+        loader=r.loader,mesh_holder=r.mesh,material_holder=r.material,asset=r.asset_owner}
     r.go=nil;r.warm_mesh=nil
+end
+local function poll_resource(r)
+    if r.phase~='userdata' and r.phase~='mesh' then return end
+    if q.pause.menu==true or q.pause.player==true or q.foreground==false then r.start=r.start+1 end
+    if r.phase=='userdata' then
+        local mh=r.loader:get_field('_Mesh');local md=r.loader:get_field('_Material')
+        if mh and md and q.resource_allocated<2 and owned_count()<2560 then
+            assert(sdk.is_managed_object(mh) and sdk.is_managed_object(md),'Invalid engine resource holders')
+            assert(call(mh,'get_ResourcePath')==r.prefix..'.mesh' and call(md,'get_ResourcePath')==r.prefix..'.mdf2','Wrong dependency paths')
+            r.mesh=pin(mh);r.material=pin(md);q.resource_allocated=q.resource_allocated+1
+            r.go=pin(sdk.find_type_definition('via.GameObject'):get_method('create(System.String, via.Folder)'):call(nil,'OMC_CubePreload_'..r.kind,r.folder))
+            call(r.go,'get_Transform'):set_position(Vector4f.new(r.position.x,r.position.y,r.position.z,1),false)
+            call(r.go,'set_DrawSelf',false)
+            r.warm_mesh=pin(call(r.go,'createComponent(System.Type)',sdk.find_type_definition('via.render.Mesh'):get_runtime_type()))
+            call(r.warm_mesh,'set_Enabled',false);call(r.warm_mesh,'set_StaticMesh',false)
+            -- Bind once. Never replace holders/rebuild the component on a timer.
+            call(r.warm_mesh,'setMesh',r.mesh);call(r.warm_mesh,'set_Material',r.material)
+            call(r.warm_mesh,'set_RenderOutputID',31);call(r.warm_mesh,'set_DrawShadowCast',true)
+            r.phase='mesh'
+        end
+    end
+    if r.go then
+        if q.frame%60==0 then
+            r.diagnostic={model=r.kind,asset=r.asset,age_frames=q.frame-r.start,loader='engine_userdata',
+                mesh_ready=optional(r.warm_mesh,'get_MeshReady'),material_ready=optional(r.warm_mesh,'get_MaterialReady'),
+                materials=optional(r.warm_mesh,'get_MaterialNum'),enabled=optional(r.warm_mesh,'get_Enabled')}
+        end
+        if call(r.warm_mesh,'get_MeshReady') and call(r.warm_mesh,'get_MaterialReady') then
+            assert(call(r.warm_mesh,'get_MaterialNum')==1,'Wrong preloaded material count')
+            r.ready=true;r.phase='ready';retire_warmer(r);r.folder=nil;return
+        end
+    end
+    if q.frame-r.start>600 then error('Engine dependency load timeout; only this appearance retains MC drawing') end
 end
 local function poll_resources()
     local pause=sdk.get_managed_singleton and sdk.get_managed_singleton('app.PauseManager')
@@ -58,37 +83,15 @@ local function poll_resources()
         if q.frame-b.frame>10 and not call(b.go,'get_Valid') then table.remove(q.warm_retired,i) end
     end
     for _,r in pairs(q.holders) do
-        if r.go then
-            if q.frame%60==0 then
-                r.diagnostic={model=r.kind,asset=r.asset,age_frames=q.frame-r.start,mesh_ready=optional(r.warm_mesh,'get_MeshReady'),
-                    material_ready=optional(r.warm_mesh,'get_MaterialReady'),materials=optional(r.warm_mesh,'get_MaterialNum'),
-                    enabled=optional(r.warm_mesh,'get_Enabled'),draw=optional(r.go,'get_Draw'),update=optional(r.go,'get_Update'),
-                    folder=optional(call(r.go,'get_Folder'),'get_Path')}
-            end
-            if q.pause.menu==true or q.pause.player==true or q.foreground==false then r.start=r.start+1 end
-            if call(r.warm_mesh,'get_MeshReady') and call(r.warm_mesh,'get_MaterialReady') then
-                assert(call(r.warm_mesh,'get_MaterialNum')==1,'Wrong preloaded material count')
-                r.ready=true;retire_warmer(r)
-            elseif not r.rebound and q.frame>=r.rebind_at and q.resource_allocated<2 then
-                q.resource_allocated=q.resource_allocated+1;r.rebound=true
-                call(r.warm_mesh,'set_Enabled',false)
-                refresh_holders(r)
-                call(r.warm_mesh,'setMesh',r.mesh);call(r.warm_mesh,'set_Material',r.material)
-            elseif q.frame-r.start>600 then
-                r.attempts=(r.attempts or 0)+1;retire_warmer(r)
-                r.mesh=nil;r.material=nil
-                if r.attempts>=3 then r.error='Resource preload timeout after 3 attempts'
-                else r.retry_frame=q.frame+60 end
-            end
-        end
+        local ok,err=pcall(poll_resource,r)
+        if not ok then r.error=tostring(err);r.phase='error';retire_warmer(r) end
     end
 end
 local function resources(kind,c,p,priority)
     -- The DLL Lua API supplies doubles (2.0), while JSON object keys are "2".
     kind=assert(math.tointeger(kind),'Invalid cube kind');assert(kind>=1 and kind<=0xffffffff,'Invalid model ID')
     local r=q.holders[kind]
-    if r and (r.ready or r.go or r.error) then return r end
-    if r and r.retry_frame and q.frame<r.retry_frame then return nil end
+    if r and (r.ready or r.phase=='userdata' or r.phase=='mesh' or r.error) then return r end
     if not r then
         local job=pending[kind]
         if not job then
@@ -102,7 +105,7 @@ local function resources(kind,c,p,priority)
         end
         if not job.result and q.frame%15==0 then
             local value=read_json('onimusha_mc/native_models/'..job.id..'/result.json')
-            if value then
+            if value and (not value.ok or value.empty or value.loader_version==1) then
                 assert(value.id==job.id and value.model==kind and value.epoch==job.epoch and value.world==job.world and value.mc_pid==job.mc_pid and value.generation==job.generation,'Stale model result')
                 job.result=value
             end
@@ -116,7 +119,7 @@ local function resources(kind,c,p,priority)
         end
     end
     if q.resource_allocated>=2 or owned_count()>=2560 then return nil end
-    local loading=0;for _,value in pairs(q.holders)do if value.go then loading=loading+1 end end
+    local loading=0;for _,value in pairs(q.holders)do if value.phase=='userdata' or value.phase=='mesh' then loading=loading+1 end end
     if loading>=8 then return nil end
     q.resource_allocated=q.resource_allocated+1
     if not r then
@@ -125,32 +128,26 @@ local function resources(kind,c,p,priority)
         r={kind=kind,asset=id}
         q.holders[kind]=r
     end
-    if not r.mesh then refresh_holders(r) end
-    -- A fresh hidden GO follows the proven render_section cold-load path. Attaching a
-    -- cold resource directly to an already initialized collider GO can leave MeshReady false.
-    -- This staging object is per KIND, never per placed block, and retires when ready.
-    r.go=pin(sdk.find_type_definition('via.GameObject'):get_method('create(System.String, via.Folder)'):call(nil,'OMC_CubePreload_'..kind,c.folder))
-    local pos=c.to_native(p.x+.5,p.y+.5,p.z+.5)
-    call(r.go,'get_Transform'):set_position(Vector4f.new(pos.x,pos.y,pos.z,1),false)
-    r.start=q.frame;r.rebind_at=q.frame+30;r.rebound=false;call(r.go,'set_DrawSelf',false)
-    r.warm_mesh=pin(call(r.go,'createComponent(System.Type)',sdk.find_type_definition('via.render.Mesh'):get_runtime_type()))
-    call(r.warm_mesh,'set_Enabled',false);call(r.warm_mesh,'set_StaticMesh',false)
-    call(r.warm_mesh,'setMesh',r.mesh);call(r.warm_mesh,'set_Material',r.material)
-    call(r.warm_mesh,'set_RenderOutputID',31);call(r.warm_mesh,'set_DrawShadowCast',true)
+    r.prefix='mod/onimusha_mc/sections/'..r.asset..'/'..r.asset
+    r.position=c.to_native(p.x+.5,p.y+.5,p.z+.5);r.folder=c.folder;r.start=q.frame;r.phase='userdata'
+    local ok,err=pcall(function()
+        r.loader=r.loader or pin(sdk.create_userdata_global('app.montage.data.MontagePartsModelData',r.prefix..'_loader.user'))
+    end)
+    if not ok then r.error=tostring(err);r.phase='error' end
     return r
 end
 local function remove(k)
     local b=q.instances[k];if not b then return end
-    if call(b.owner.go,'get_Valid') then call(b.mesh,'set_Enabled',false) end
+    if b.mesh and call(b.owner.go,'get_Valid') then call(b.mesh,'set_Enabled',false) end
     if b.owner.owned_display then
-        retire_warmer({go=b.owner.go,warm_mesh=b.mesh})
+        retire_warmer({go=b.owner.go,warm_mesh=b.mesh,asset_owner=b.holders})
     end
     q.instances[k]=nil;q.removed=q.removed+1
 end
 local function clear(reason)
     local keys={};for k in pairs(q.instances)do keys[#keys+1]=k end
     for _,k in ipairs(keys)do remove(k)end
-    for _,r in pairs(q.holders) do retire_warmer(r) end
+    for _,r in pairs(q.holders) do retire_warmer(r);if not r.ready and not r.error then r.phase='idle' end;r.folder=nil end
     for _,r in pairs(lights)do retire_warmer(r)end;lights={}
     for _,r in pairs(dynamics)do retire_warmer(r)end;dynamics={}
     if q.context then q.context.bridge.release_section() end
@@ -245,16 +242,19 @@ end
 local function attach(owner,p,r)
     -- Display ownership is independent of the short-range collision GameObject.
     -- Match the game-tested prefab + Mesh initialization order before enabling drawing.
+    local b={owner=owner,p=p,start=q.frame,holders=r}
+    q.instances[key(p)]=b
     call(owner.go,'set_DrawSelf',false)
     if not owner.display_mesh then
         owner.display_mesh=pin(call(owner.go,'createComponent(System.Type)',sdk.find_type_definition('via.render.Mesh'):get_runtime_type()))
     end
     local mesh=owner.display_mesh
+    b.mesh=mesh
     call(mesh,'set_Enabled',false);call(mesh,'set_StaticMesh',false)
     call(mesh,'setMesh',r.mesh);call(mesh,'set_Material',r.material)
     call(mesh,'set_RenderOutputID',31);call(mesh,'set_DrawShadowCast',true)
     owner.display_holders=r
-    q.instances[key(p)]={owner=owner,mesh=mesh,p=p,start=q.frame,holders=r};q.created=q.created+1
+    q.created=q.created+1
 end
 local function tick()
     q.frame=q.frame+1;q.resource_allocated=0;poll_resources();local c=q.context;if not c then return end
@@ -291,12 +291,14 @@ local function tick()
                 owner={go=go,ready=true,owned_display=true}
             end
             if r and r.ready and not r.empty and owner and owner.ready and call(owner.go,'get_Valid')then
-                attach(owner,p,r);allocated=allocated+1;if allocated>=4 then break end
+                local ok,err=pcall(attach,owner,p,r)
+                if not ok then r.error=tostring(err);r.ready=false;r.phase='error';remove(key(p)) end
+                allocated=allocated+1;if allocated>=4 then break end
             end
         end
     end
-    local ready={};local show={}
-    for _,b in pairs(q.instances)do
+    local ready={};local show={};local failed={}
+    for k,b in pairs(q.instances)do
         if b.ready or (call(b.mesh,'get_MeshReady') and call(b.mesh,'get_MaterialReady'))then
             if not b.ready then assert(call(b.mesh,'get_MaterialNum')==1,'Wrong material count') end
             ready[#ready+1]=b.p;show[#show+1]=b
@@ -308,9 +310,13 @@ local function tick()
                     materials=call(b.mesh,'get_MaterialNum'),owner_draw=read(b.owner.go,'get_Draw'),
                     owner_update=read(b.owner.go,'get_Update'),component_enabled=read(b.mesh,'get_Enabled')}
             end
-            if q.frame-b.start>600 then error('Cube resource timeout; overlay restored') end
+            if q.frame-b.start>600 then
+                b.holders.error='Display binding timeout; only this appearance retains MC drawing'
+                b.holders.ready=false;b.holders.phase='error';failed[#failed+1]=k
+            end
         end
     end
+    for _,k in ipairs(failed)do remove(k)end
     if not c.bridge.ack_native_instances({epoch=c.epoch,cubes=ready})then clear('receipt_rejected');return end
     for _,b in ipairs(show)do if not b.ready then call(b.mesh,'set_Enabled',true);call(b.owner.go,'set_DrawSelf',true);b.ready=true end end
     q.ready=#ready;q.desired=#s.cubes;q.phase=#ready==#s.cubes and 'synchronized' or 'loading';q.receipts=q.receipts+1
@@ -337,7 +343,7 @@ end
 function api.stop()clear('disabled')end
 function api.busy()
     if next(q.instances) or next(lights) or next(dynamics) or #q.warm_retired>0 then return true end
-    for _,r in pairs(q.holders) do if r.go then return true end end
+    for _,r in pairs(q.holders) do if r.phase=='userdata' or r.go then return true end end
     return false
 end
 function api.status()
@@ -347,7 +353,7 @@ function api.status()
     local diagnostics={}
     for kind,r in pairs(q.holders) do
         if r.ready then resources_ready=resources_ready+1 end
-        if r.go then resources_loading=resources_loading+1 end
+        if r.phase=='userdata' or r.go then resources_loading=resources_loading+1 end
         if r.error then resource_errors[tostring(kind)]=r.error end
         if r.diagnostic and #diagnostics<24 then diagnostics[#diagnostics+1]=r.diagnostic end
     end

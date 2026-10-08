@@ -6,17 +6,31 @@
 
 ## 安装状态
 
-21:32 已安装崩溃后的恢复候选：保留自动方块绘制，**暂停玩家、手持物、NPC、活动 TNT 的原生绘制**。
-21:16 隐藏组件重建实验导致严重卡顿及 `Mesh.setMesh` 后原生访问异常；已撤回该实验，
-恢复此前用户确认方块正常的同组件 holder 绑定路径，冷启动稳定性仍待确认。
-78项部署哈希核对通过，当前存档65文件已备份且未改动。
-恢复回执：`G:/Onimusha_MC_mod/logs/native-lighting-crash-20261008-211723/recovery-install.json`。
+22:39 已热更新引擎 USER3 依赖加载候选；**玩家、手持物、NPC、活动 TNT 的原生绘制仍关闭**。
+21:16 组件重建版本崩溃；恢复旧的定时 holder 重绑后，21:40 仍在 `Mesh.setMesh` 出现异常，
+导致新增方块让全部绘制回退。以上两条资源加载路径均已撤回，不能作为可靠回退版本。
+新路径通过引擎反序列化 Mesh/MDF holder，4 个全新单方块资源首次加载及撤除成功。
+每组件绑定一次；取消超时重绑/重建，单类型失败不会清除已成功方块的回执。
+22:45 用户已确认接管时方块光照正常，新创建方块等待时间明显缩短；日志11/11方块就绪，
+6种外观已加载，热更新后无新增绑定异常。22:49 用户进一步确认放拆不再全体闪回、
+约30米仍有原生光照、F10恢复正常；日志显示229个显示对象全部撤除，碰撞亦无残留。
+长期稳定性、更多外观与动态实体仍需单独验证。
+
+The engine-owned USER3 dependency loader passed the user's block-lighting,
+place/remove continuity, approximately 30 m visibility and F10 restoration tests.
+All 229 display objects were retired and no collision objects remained after takeover stopped.
+Native entity rendering remains disabled; this result does not validate that path.
+78项部署哈希核对通过；本轮未修改存档。安装回执及旧文件：
+`G:/Onimusha_MC_mod/runtime/test-backups/engine-resource-loader-20261008-223922/receipt.json`。
 此前128米显示和放拆保留改动仍待实景验收，不能视为已全部通过。
 
 ## 自动转换怎样工作
 
 MC 导出实际模型、贴图和朝向；DLL 按完整外观去重，后台常驻 Blender 将新外观写成鬼武者的
-MESH/MDF/TEX。相同外观共用原生资源，新增同类方块只创建实例，不重新压缩贴图。
+MESH/MDF/TEX 及 USER3 依赖文件。相同外观共用原生资源，新增同类方块只创建实例，不重新压缩贴图。
+USER3 是私有 `app.montage.data.MontagePartsModelData` 数据容器，仅填写 Mesh/Material 路径，
+不挂接玩家或执行换装。模板由 REE-Lib 生成并回读校验，worker 仅替换等长私有资源 ID。
+回执要求 `loader_version=1`；旧转换结果由 worker 补依赖文件，无需重新导出贴图。
 资源完整写入、原生 Mesh/Material 加载完成且会话回执吻合后，才隐藏对应的 MC 绘制。
 等待期间保持原有 MC 画面，因此首次出现新外观时可能先以 MC 光照显示，再切换成原生绘制。
 新方块优先于积压的实体面转换；结果写入遇Windows读锁重试、已完成任务重启复用，仍不能承诺新外观零延迟。

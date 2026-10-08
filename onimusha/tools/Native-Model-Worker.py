@@ -18,6 +18,7 @@ sys.path.insert(0,str(Path(__file__).parent))
 from native_model_input import convert_model
 
 from native_worker_io import atomic_json,completed_result,queued_requests
+from native_model_loader import add_loader,LOADER_VERSION
 
 def main():
     ap=argparse.ArgumentParser()
@@ -71,8 +72,16 @@ def main():
             try:
                 assert re.fullmatch(r'\d+_\d+_\d+',job.name) and len(done)<=8192
                 req=json.loads(path.read_text(encoding='utf-8'));assert req['id']==job.name and req['host_pid']==a.host_pid
-                if completed_result(job,req) is not None:
-                    done.add(job.name);continue
+                previous=completed_result(job,req)
+                if previous is not None:
+                    # Upgrade old conversion receipts without raw inputs, re-export,
+                    # or mutation of an already loaded Mesh/MDF/TEX.
+                    if previous['ok'] and not previous.get('empty'):
+                        previous['files']=add_loader(a.game,previous['asset_id'],previous['files'])
+                        previous['loader_version']=LOADER_VERSION
+                        publish(job,previous)
+                    else:done.add(job.name)
+                    continue
                 processed+=1
                 result.update(model=req['model'],world=req['world'],epoch=req['epoch'],mc_pid=req['mc_pid'],generation=req['generation'])
                 raw=(job/'section.bin').read_bytes()
@@ -100,7 +109,8 @@ def main():
                         if target.exists():assert hashlib.sha256(target.read_bytes()).hexdigest()==sha
                         else:
                             temp=target.with_suffix(target.suffix+'.tmp');temp.write_bytes(data);os.replace(temp,target)
-                    result.update(ok=True,asset_id=stem,triangles=report['triangles'],files=report['files']);built+=1
+                    files=add_loader(a.game,stem,report['files'])
+                    result.update(ok=True,asset_id=stem,triangles=report['triangles'],files=files,loader_version=LOADER_VERSION);built+=1
                 result['seconds']=round(time.perf_counter()-begin,3)
             except Exception as e:
                 if str(e)=='fully_transparent_model':result.update(ok=True,empty=True)

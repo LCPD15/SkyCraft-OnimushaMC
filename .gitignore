@@ -27,3 +27,5 @@ launch-dev.args
 onimusha_mc_probe*.json
 onimusha/tools/UnitBoxCollider/bin/
 onimusha/tools/UnitBoxCollider/obj/
+onimusha/tools/NativeModelLoader/bin/
+onimusha/tools/NativeModelLoader/obj/

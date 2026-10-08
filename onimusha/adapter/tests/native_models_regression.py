@@ -14,10 +14,25 @@ ctx.bridge.ack_native_instances=function(a)ack_rows=a.cubes;acks=acks+1;return a
 ctx.bridge.capture_native_model=function(a)
  captures=captures+1;local id='777_100_'..captures
  results['onimusha_mc/native_models/'..id..'/result.json']={id=id,ok=true,model=a.model,
- epoch=81,world=9,mc_pid=1234,generation=1,asset_id='section_0123456789abcdef0123'}
+ epoch=81,world=9,mc_pid=1234,generation=1,asset_id='section_0123456789abcdef0123',loader_version=1}
  return id
 end
 local old_advance=advance
+dependencies_ready=true
+sdk.create_resource=function()error('Unsafe direct resource path must not be used')end
+sdk.is_managed_object=function(h)return h and h.engine_holder==true end
+sdk.create_userdata_global=function(t,path)
+ assert(t=='app.montage.data.MontagePartsModelData')
+ local prefix=path:gsub('_loader.user$','')
+ local mh=obj({get_ResourcePath=function()return prefix..'.mesh' end});mh.engine_holder=true
+ local md=obj({get_ResourcePath=function()return prefix..'.mdf2' end});md.engine_holder=true
+ local data=obj({})
+ data.get_field=function(_,f)
+  if not dependencies_ready then return nil end
+  assert(f=='_Mesh' or f=='_Material');return f=='_Mesh' and mh or md
+ end
+ return data
+end
 function advance(n,active)
  for i=1,n do old_advance(1,active);for _,b in ipairs(objects)do if b.dying then b.valid=false end end end
 end
