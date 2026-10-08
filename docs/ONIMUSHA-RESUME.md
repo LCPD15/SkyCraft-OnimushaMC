@@ -5,6 +5,15 @@
 
 ## 最新结果与下一步
 
+### 19:53 当前运行：protocol 15 已连接，等待自动方块转换实景测试
+
+用户已启动并进入场景。游戏 PID46412，MC PID111780，转换器 Blender PID122116，原世界 OnimushaMC-XYZ-v2。
+相机、地形、host_ready、connected 均 true；F10 关闭，3 sections / 4 textures，invalid/rejected=0，error为空。
+worker ready，mode=automatic_models。首次连接证据 `logs/live-automatic-models-20261008/connected-f10-off.json`。
+已请用户 F10 开启，在安全处放置石头、南瓜、梯子，初次等待约30秒后观察纹理/光照/遮挡/镂空，保持开启后回复。
+收到回复立即读取 native_sections 与 worker/result，勿重启或 Reset；此版仍未获得实景通过结论。
+下一轮再测试第一人称手持物/F5动态角色、火把原生照明及近镜头半透明抑制。
+
 ### 11:47 当前安装：protocol 15 自动外观转换，待启动游戏验收
 
 本节取代下面所有“当前 PID / protocol14 / 未实现”描述。旧内容保留为历史，不要依照旧停点启动或部署。
