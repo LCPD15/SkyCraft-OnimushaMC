@@ -133,13 +133,18 @@ function api.query_terrain(fn)
     local saved={}
     local ok,result=pcall(function()
         for _,b in pairs(q.blocks)do
-            if b.colliders and call(b.go,'get_Valid')then
-                local enabled=call(b.colliders,'get_Enabled')
+            if b.colliders and call(b.go,'get_Valid') and call(b.colliders,'get_Ready')then
+                assert(call(b.colliders,'getCollidersCount')==1,'Unexpected owned collider count')
+                local collider=b.collider or call(b.colliders,'getCollider(System.UInt32)',0)
+                assert(call(collider,'get_GameObject'):get_address()==b.go:get_address(),'Owned query collider mismatch')
+                -- Component Enabled is applied later by the scene update. The
+                -- Collidable enabled bit takes effect at the query itself.
+                local enabled=call(collider,'get_Enabled')
                 assert(type(enabled)=='boolean','Owned collider enabled state unavailable')
                 if enabled then
-                    saved[#saved+1]=b.colliders
-                    call(b.colliders,'set_Enabled',false)
-                    assert(call(b.colliders,'get_Enabled')==false,'Owned collision query mask failed')
+                    saved[#saved+1]=collider
+                    call(collider,'set_Enabled',false)
+                    assert(call(collider,'get_Enabled')==false,'Owned collision query mask failed')
                 end
             end
         end

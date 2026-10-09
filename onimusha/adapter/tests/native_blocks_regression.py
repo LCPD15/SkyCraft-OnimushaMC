@@ -16,9 +16,10 @@ local prefab=object('via.Prefab',{
  set_Standby=function(b)standby=b end,get_Ready=function()return prefab_ready end,
  ['instantiate(via.vec3, via.Folder)']=function(p,folder)
   assert(folder=='folder' and standby);created=created+1
-  local b={valid=true,enabled=true,p=p};local go,col,cs
+  local b={valid=true,enabled=true,collidable_enabled=true,p=p};local go,col,cs
   col=object('via.physics.Collider',{get_Shape=function()return object('via.physics.BoxShape',{})end,
-   get_GameObject=function()return go end,get_Ready=function()return true end})
+   get_GameObject=function()return go end,get_Ready=function()return true end,
+   get_Enabled=function()return b.collidable_enabled end,set_Enabled=function(v)b.collidable_enabled=v end})
   cs=object('via.physics.Colliders',{get_Ready=function()return true end,getCollidersCount=function()return 1 end,
    ['getCollider(System.UInt32)']=function(i)assert(i==0)return col end,set_Enabled=function(v)b.enabled=v end,get_Enabled=function()return b.enabled end})
   go=object('via.GameObject',{get_Valid=function()return b.valid end,set_Name=function(n)b.name=n end,
@@ -56,14 +57,14 @@ prefab_ready=true;advance(2);assert(created==1 and onimusha_native_blocks.status
 assert(objects[1].p.x==.5 and objects[1].p.y==2.5 and objects[1].p.z==3.5)
 print('PASS asynchronous resource readiness and calibrated unit-box placement')
 local result=onimusha_native_blocks.query_terrain(function()
- assert(not objects[1].enabled);return 'native scene only'
+ assert(not objects[1].collidable_enabled and objects[1].enabled);return 'native scene only'
 end)
-assert(result=='native scene only' and objects[1].enabled)
-local ok=pcall(onimusha_native_blocks.query_terrain,function()assert(not objects[1].enabled);error('query failed')end)
-assert(not ok and objects[1].enabled)
-objects[1].enabled=false
-onimusha_native_blocks.query_terrain(function()assert(not objects[1].enabled)end)
-assert(not objects[1].enabled);objects[1].enabled=true
+assert(result=='native scene only' and objects[1].collidable_enabled)
+local ok=pcall(onimusha_native_blocks.query_terrain,function()assert(not objects[1].collidable_enabled);error('query failed')end)
+assert(not ok and objects[1].collidable_enabled)
+objects[1].collidable_enabled=false
+onimusha_native_blocks.query_terrain(function()assert(not objects[1].collidable_enabled)end)
+assert(not objects[1].collidable_enabled);objects[1].collidable_enabled=true
 print('PASS terrain query masks only owned MC collision, restores after exceptions and preserves predisabled state')
 advance(12);assert(created==1)
 sample.cubes={};sample.total=0;sample.revision=2;advance(6)

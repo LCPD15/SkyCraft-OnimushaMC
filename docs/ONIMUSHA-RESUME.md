@@ -5,6 +5,54 @@
 
 ## 最新结果与下一步
 
+### 2026-10-09 吸魂与跨边界修正已通过用户验收
+
+用户确认 C 吸魂正常；随后右键吸魂／原使用行为和原断联边界复测回复「ok」。
+最后关闭 F10，原角色移动、操作、C 吸魂及松开停止的恢复检查也回复「ok」。
+当前游戏和 MC 保持运行、接管关闭，无待回复问题；不要再次要求 Reset 或重启。
+
+真正完成修复的是 generation4：generation3 的命令注入曾被错误的精确类型判断拒绝，
+实际字段类型为 `ace.Bitset\`1<System.Int32>`，继承 `ace.Bitset`。
+改用继承关系验证后，原生 normal/cancel 两组 48 位命令的原值写回／读回均通过，
+ABSORB=14 才真正进入命令结果。只改 supporter 标志不足以启动吸魂。
+原生范围资产已确认：基础水平20、垂直50、全向360°，不是范围缺失，未扩大范围。
+
+现场记录25次原生成功、25次奖励入队，MC stdout 有对应 receipt1～25，包含回血、修理、
+堆叠增加及经验四类。证据 `logs/soul-boundary-20261009/c-absorption-user-confirmed.json`、
+`c-absorption-host-summary.json`、`rmb-boundary-user-confirmed-*.json` 与 `acceptance.json`。
+成功总数是本会话累计，不能将其解释为右键单独新增25次；右键与边界视觉结果来自用户确认。
+最后状态 enabled/active=false、command/held=false、原生模型及碰撞 ready=0，无脚本错误。
+
+边界修正使用下节实测的 `Collidable.Enabled` 即时屏蔽，仅在本次同步地形查询期间排除
+本 MOD 的方块碰撞体，返回前恢复；组件级 `Colliders.Enabled` 在同帧不生效，已弃用。
+动态姿态 DLL/JAR 保持用户已确认不闪动的版本。本轮没有重启鬼武者或改写库存。
+generation4 安装收据 `logs/soul-boundary-20261009/bitset-hotfix-installed.json`。
+后续如有新场景边界失败，先读 query 的非三角形类型和 last_query_masked，勿取消覆盖范围保护。
+
+### 2026-10-09 23:04 原生命令吸魂修正 + 碰撞体即时屏蔽，已安装待 C 测试
+
+用户确认上一热修吸魂仍失败；抓取 held_frames551 / overwritten0 / success0，已排除输入被覆盖假设。
+改接当前玩家的 `cPlayerCommandResult.mergeResult` 后置，写反射验证的 ABSORB=14 普通/取消命令位
+和 `_IsSoulAbsorption`，只恢复自己改过的位，保留其他命令和原色奖励。入口已实时观察到数千次调用，
+F10 关闭时没有注入和错误，实际 C 测试待用户回复。
+
+边界原因进一步实证：组件 `Colliders.Enabled=false` 在同一查询内仍返回方块，
+改为真正的 `Collidable.Enabled=false`。在已验证 physics_cube 上同帧四次原生区域查询：
+before boxes1/triangles20 → component disabled boxes1/20 → collidable disabled boxes0/20 → restored boxes1/20。
+证据 `logs/soul-boundary-20261009/native-collidable-mask-verified.json`。独立方块已 removed/destroyed，
+探针已 disabled，查询保留所有场景三角形。线上排除仅针对本 MOD 实际持有且校验 owner 的碰撞体。
+未知原生形状仍保守拒绝认证；没有去掉地形覆盖保护。
+
+Codex 崩溃后 MC 和 worker 也退出，鬼武者 PID30324 仍在。退出后的原世界67文件已完整备份到
+`runtime/test-backups/soul-command-hotfix-20261009-230120/world-after-codex-crash`，未修改物品/存档数据。
+重新连接原世界：MC PID53520、worker84528，日志 `logs/live-soul-command-20261009.stdout.log`。
+三份 Lua 热更 generation3，安装/备份收据 `logs/soul-boundary-20261009/command-hotfix-installed.json`。
+command enum 新现场证据在同目录 `command-enum-metadata.json`。
+
+已请求用户按 F10，打出魂后仅按 C 3秒，观察吸收及MC奖励，再回安全位置保持开启。
+收到回复先读 onimusha_soul_status.json / MC stdout，再测右键、原边界。
+无需重启、无需手动 Reset，用户已确认的动态闪动修复保持不变。
+
 ### 2026-10-09 22:36 热更新吸魂决策时序与 MC 碰撞查询排除，待测试
 
 用户已确认动态位置闪动修复；吸魂无效，且边界外接管失效、返回恢复。

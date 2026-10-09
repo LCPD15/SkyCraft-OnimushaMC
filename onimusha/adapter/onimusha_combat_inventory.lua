@@ -705,7 +705,7 @@ end
 local function report()
     local r={id=q.id,frame=q.frame,phase=q.phase,error=q.error,position=q.position,
         scene=q.scene_address,object_name=q.name,ground=q.ground,ready=q.ready,destroyed=q.destroyed,
-        collision=q.collision,action=q.action,asset_id=q.asset_id,pending_id=q.pending_id,model_loader=q.model_loader and q.model_loader:get_address(),motion=q.motion,motion_updates=q.motion_updates,
+        collision=q.collision,terrain_mask_result=q.terrain_mask_result,action=q.action,asset_id=q.asset_id,pending_id=q.pending_id,model_loader=q.model_loader and q.model_loader:get_address(),motion=q.motion,motion_updates=q.motion_updates,
         material_probe=q.material_probe,transform_probe=q.transform_probe,material_isolation=q.material_isolation,
         replay_scale=q.replay_scale,flash_probe=q.flash_probe}
     if q.mesh_holder and sdk.is_managed_object then
@@ -827,6 +827,28 @@ local function verify_collision()
         owner_update=call(q.go,'get_Update'),owner_draw=call(q.go,'get_Draw'),
         ready=call(q.collider,'get_Ready'),layer=call(call(q.collider,'get_FilterInfo'),'get_Layer'),
         bounds=snapshot(call(q.colliders,'get_BoundingAabb'),2,{})}
+    if found and q.terrain_mask_probe and not q.terrain_mask_result then
+        local aq=assert(sdk.create_instance('via.physics.GetAreaPrimitiveQuery')):add_ref()
+        local area=ValueType.new(sdk.find_type_definition('via.AABB'));local p=q.position
+        area:set_field('minpos',Vector3f.new(p.x-1,p.y-1,p.z-1));area:set_field('maxpos',Vector3f.new(p.x+1,p.y+1,p.z+1))
+        call(aq,'set_Area',area);call(aq,'set_FilterInfo',call(q.cc,'get_FilterInfo'))
+        local function sample()
+            local r=assert(sdk.call_native_func(sdk.get_native_singleton('via.physics.System'),sdk.find_type_definition('via.physics.System'),'getAreaPrimitive',aq)):add_ref()
+            local result={boxes=call(r,'get_NumBoxes'),triangles=call(r,'get_NumTriangles')}
+            r:release();return result
+        end
+        local function masked(object)
+            local old=call(object,'get_Enabled');assert(type(old)=='boolean')
+            local ok,r=pcall(function()call(object,'set_Enabled',false);return sample()end)
+            call(object,'set_Enabled',old);assert(call(object,'get_Enabled')==old)
+            if not ok then error(r)end;return r
+        end
+        local ok,r=pcall(function()
+            return {before=sample(),component=masked(q.colliders),collidable=masked(q.collider),restored=sample()}
+        end)
+        aq:release();if not ok then error(r)end
+        q.terrain_mask_result=r
+    end
     return found
 end
 local function start(c)
@@ -843,6 +865,7 @@ local function start(c)
     local p=call(go,'get_Transform'):get_position()
     q.position={x=p.x+3,y=p.y+0.55,z=p.z+3};q.name='OMC_NativeProbe_'..c.id
     q.scene_address=sc:get_address();q.start=q.frame;q.ready=false;q.destroyed=false;q.collision=nil;q.action=c.action
+    q.terrain_mask_probe=c.terrain_mask_probe==true;q.terrain_mask_result=nil
     q.asset_id=nil;q.motion=c.action=='render_userdata' and c.motion==true;q.motion_updates=0
     q.inspect_dynamic=c.inspect_dynamic==true;q.tint_probe=c.tint_probe==true;q.material_probe=nil;q.transform_probe=nil;q.material_isolation=nil
     q.replay_scale=c.replay_scale==true;q.flash_probe=c.flash_probe==true

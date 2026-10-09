@@ -28,12 +28,13 @@ MC 接管时，按住 C 或鼠标右键吸魂。右键仍保留原来的物品�
 
 `updateCommand` 和 `requestSoulAbsorptionAction` 没有可靠非内联回调；
 `updateBeforeAction` / `lateUpdate` 已确认逐帧触发。
-生产脚本只在当前玩家、当前接管会话下临时写 `_IsCommandAbsorb`，
+生产脚本在当前玩家的 `cPlayerCommandResult.mergeResult` 返回后写 ABSORB 命令位及
+`_IsSoulAbsorption`，并在 supporter 决策前临时写 `_IsCommandAbsorb`。
 在 `lateUpdate` 后或帧末恢复保存的原值；退出接管／重载也恢复。
 不跳过原生成功函数、不修改原生颜色奖励、不按敌人类别分支。
 
 持有原生对象引用不等于对象仍有效。恢复时沿已验证的玩家实体链检查 GameObject 有效性。
-吸魂输入写入与原生吸收动作的实际游戏联动仍需要用户验收，不能用只读记录代替。
+2026-10-09 用户已确认 C／右键吸魂及关闭接管后的原生行为恢复正常；现场有25次成功回调及对应MC奖励。
 
 ## 动态物体抖动 / Dynamic pose jitter
 
@@ -68,3 +69,27 @@ MC 更快时丢弃中间完整帧，宿主更快时重复完整帧，禁止混�
 并生成吸魂动作请求。热修在这一入口前重新应用实时输入，保留早期写入、原值恢复和原生奖励流程。
 增加 held_frames、bone_injections、overwritten 和实际原生吸魂类型／状态记录。
 Lua 回归模拟早期标志被原生命令覆盖，检查决策前重写及引用／原值恢复；不能代替游戏内成功吸魂。
+
+随后用户复测仍无效。现场 held_frames=551、overwritten=0、successes=0：输入已正确传入，
+**原生覆盖输入的猜测被排除**，仅写 supporter 的命令标志不足以启动吸魂动作。
+23:01 热修改接 `app.cPlayerCommandResult.mergeResult(app.cPlayerCommandController)` 的返回点，
+验证 controller 的 Character 是当前玩家后，仅写当前结果的 ABSORB normal/cancel 命令位和
+`_IsSoulAbsorption`。ABSORB=14 经现场 `app.PlayerCommand.TYPE.ABSORB` 反射与原生读位代码交叉确认；
+不使用 TYPEBit 的数值代替索引、不放开其他输入、不直接制造吸收成功。
+保存并在帧末／重载恢复各 Bitset 的单一 ABSORB 位和原始 Boolean，不覆盖其他命令。
+新增 command_calls/injections/held 和 last_held_native；输入生命周期回归通过，等待实际 C 吸魂结果。
+
+### 最终实测结论
+
+首次正式命令版本仍失败，原因是把合法的泛型派生类型误判为错误类型：
+`_CommandResultNormal`／`_CommandResultCancel` 实际为 `ace.Bitset\`1<System.Int32>`，
+必须检查继承 `ace.Bitset`，不能要求类型全名等于基类。两组长度48，ABSORB索引14。
+接管关闭时只将该位当前值原样写回并读回，验证继承方法分派；不会制造吸魂输入。
+修正后用户确认 C 能吸魂；右键吸魂、原使用行为、关闭接管恢复均确认正常。
+Lua 回归以真实泛型派生类型模拟，覆盖两组命令恢复、其他输入位保留、所有持有引用释放。
+
+原生范围参数已经存在：基础水平20、垂直50、角度360°、成功距离约0.3；
+升级水平范围25／30／35。未通过任意增加吸魂范围来掩盖命令失败。
+现场25次原生成功对应25次MC奖励事件，MC服务端receipt1～25包含全部四类奖励，
+不修改原色奖励。用户的右键复测回复「ok」；累计计数不能区分每个按键的贡献。
+原生证据与收据位于 `G:/Onimusha_MC_mod/logs/soul-boundary-20261009/`。
