@@ -16,6 +16,10 @@ local defaults = {
     enable_block_collider_tests=false, enable_health_hook_tests=false,
     enable_terrain_queries=false,
 }
+local function normalize_damage_multiplier(value)
+    if type(value)~="number" or value~=value or value==math.huge or value==-math.huge then return 100 end
+    return math.floor(math.max(100,math.min(5000,value))+0.5)
+end
 local function read_config()
     local ok,raw=pcall(json.load_file,CFG_FILE)
     if not ok or type(raw)~="table" then raw={} end
@@ -24,6 +28,7 @@ local function read_config()
         if type(raw[k])==type(v) then result[k]=raw[k]
         else result[k]=v end
     end
+    result.enemy_host_damage_per_mc_point=normalize_damage_multiplier(result.enemy_host_damage_per_mc_point)
     if result.runtime_stage~="B" and result.runtime_stage~="C" then result.runtime_stage="A" end
     result.config_reload_frames=math.max(30,math.floor(result.config_reload_frames))
     if result.units_per_block<=0 then result.units_per_block=defaults.units_per_block end
@@ -62,6 +67,22 @@ local state = {
     blocks={}, solid_backlog={}, collider_probe=nil,
     hooks={},
 }
+local function save_damage_multiplier(value)
+    value=normalize_damage_multiplier(value)
+    local ok,err=pcall(function()
+        -- Preserve settings edited outside this panel, including unknown keys.
+        -- Do not save cfg.enabled: F10 owns its live state independently.
+        local saved=json.load_file(CFG_FILE)
+        assert(type(saved)=="table","Cannot read configuration; original settings preserved")
+        saved.enemy_host_damage_per_mc_point=value
+        assert(json.dump_file(CFG_FILE,saved)~=false,"Cannot write damage multiplier")
+        local check=json.load_file(CFG_FILE)
+        assert(type(check)=="table" and check.enemy_host_damage_per_mc_point==value,"Cannot verify saved damage multiplier")
+    end)
+    if not ok then state.damage_setting_error=tostring(err);return false end
+    cfg.enemy_host_damage_per_mc_point=value;state.damage_setting_error=nil
+    return true
+end
 local function persist_session()
     json.dump_file("onimusha_mc_session.json",{epoch=state.epoch,teleport_seq=state.teleport_seq})
     local saved=json.load_file("onimusha_mc_session.json")
@@ -763,9 +784,16 @@ end
 local function reload_config()
     if state.frame%cfg.config_reload_frames~=1 then return end
     local next_cfg=read_config()
-    local changed=false
-    for k,v in pairs(next_cfg) do if cfg[k]~=v then changed=true;break end end
+    local changed,requires_restore=false,false
+    for k,v in pairs(next_cfg) do
+        if cfg[k]~=v then
+            changed=true
+            if k~="enemy_host_damage_per_mc_point" then requires_restore=true end
+        end
+    end
     if not changed then return end
+    -- Damage-only tuning must not release input/camera or invalidate terrain.
+    if not requires_restore then cfg=next_cfg;state.damage_setting_error=nil;return end
     local previous=cfg
     fail_open("Configuration changed; native player control restored")
     cfg=next_cfg
@@ -1906,8 +1934,13 @@ local function apply_events(bridge)
                     trace.target_health_type=typename(entry.health)
                     trace.target_valid=call(target_go,"get_Valid")
                     trace.target_draw_self=call(target_go,"get_DrawSelf")
-                    local damage=math.max(0,math.min(1000,event.a or 0))*cfg.enemy_host_damage_per_mc_point
-                    trace.mc_damage=event.a;trace.host_damage_scale=cfg.enemy_host_damage_per_mc_point;trace.host_damage=damage
+                    local scale=cfg.enemy_host_damage_per_mc_point
+                    local requested=math.max(0,math.min(1000,event.a or 0))*scale
+                    -- Keep the verified native queue's per-hit bound at high multipliers.
+                    local damage=math.min(100000,requested)
+                    trace.mc_damage=event.a;trace.base_host_damage_scale=100
+                    trace.damage_multiplier=scale/100;trace.host_damage_scale=scale;trace.host_damage=damage
+                    trace.damage_capped=requested>damage
                     if damage>0 then
                         local native_hit=_G.onimusha_enemy_hit
                         if native_hit and type(native_hit.queue)=="function" and native_hit.queue(entry,state,damage,trace) then
@@ -2341,6 +2374,7 @@ re.on_application_entry("LateUpdateBehavior",function()
     if state.frame%300==0 then
         json.dump_file("onimusha_mc_status.json",{status=state.status,active=state.active,bindings=state.bindings,
             runtime_stage=cfg.runtime_stage,diagnostic_only=cfg.diagnostic_only,
+            enemy_host_damage_per_mc_point=cfg.enemy_host_damage_per_mc_point,damage_setting_error=state.damage_setting_error,
             control_hooks_enabled=cfg.install_control_hooks,terrain_queries_enabled=cfg.enable_terrain_queries,
             native_block_colliders_enabled=cfg.enable_native_block_colliders,
             health_hook_tests_enabled=cfg.enable_health_hook_tests,
@@ -2385,6 +2419,22 @@ re.on_draw_ui(function()
             if not value then fail_open("Disabled") end
         end
         imgui.text(state.status)
+        if imgui.tree_node("Damage / 伤害设置") then
+            local edited,multiplier=imgui.drag_float("Attack damage multiplier / 对敌伤害倍率",cfg.enemy_host_damage_per_mc_point,10,100,5000)
+            if edited then save_damage_multiplier(multiplier) end
+            for _,preset in ipairs({100,500,1000,2000,5000}) do
+                if preset~=100 then imgui.same_line() end
+                if imgui.button(tostring(preset).."##onimusha_damage") then save_damage_multiplier(preset) end
+            end
+            imgui.text(string.format("Current / 当前: %d (%.1fx previous damage / 原伤害)",cfg.enemy_host_damage_per_mc_point,cfg.enemy_host_damage_per_mc_point/100))
+            imgui.text("100 = previous damage / 100为原伤害；500为原伤害5倍")
+            imgui.text("Immediate + auto-save / 即时生效并自动保存")
+            imgui.text("MC attacks, projectiles and mobs / MC近战、弹射物和生物攻击")
+            imgui.text("Player damage taken and native TNT unchanged / 不影响玩家承伤和原生TNT")
+            imgui.text("Maximum native damage per hit: 100000 / 单次原生伤害上限100000")
+            if state.damage_setting_error then imgui.text("Save failed / 保存失败: "..state.damage_setting_error) end
+            imgui.tree_pop()
+        end
         imgui.text("Native collision triangles: "..tostring(state.collision_count))
         imgui.text("Enemies exported: "..tostring(state.actor_count or 0))
         imgui.text("Native block colliders: "..tostring(state.native_block_count or 0))

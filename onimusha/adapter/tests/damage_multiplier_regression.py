@@ -36,6 +36,19 @@ return function()
  assert(old==70 and new==old*10 and new~=old*100 and enemy.setters==1 and enemy.checks==1)
  passed('old explicit scale10 versus new default100 changes damage exactly tenfold with no second multiplier')
 
+ for _,factor in ipairs({100,500,1000,2000,5000}) do
+  enemy=setup_scale(factor);enemy.current=90000;enemy.maximum=90000
+  deliver({{type=1,form_id=9,a=7}})
+  close(enemy.current,90000-7*factor)
+  assert(latest('events').damage_multiplier==factor/100 and latest('events').base_host_damage_scale==100)
+  assert(not latest('events').damage_capped and enemy.setters==1)
+ end
+ passed('100/500/1000/2000/5000 presets multiply actual MC damage once;100 preserves previous damage')
+ enemy=setup_scale(5000);enemy.current=200000;enemy.maximum=200000
+ deliver({{type=1,form_id=9,a=1000}})
+ assert(enemy.current==100000 and latest('events').damage_capped and latest('events').host_damage==100000)
+ passed('high user multiplier caps at native queue limit instead of rejecting all damage')
+
  enemy=setup_scale();deliver({{type=1,form_id=9,a=2.255}})
  assert(enemy.current==4775 and enemy.setters==1);close(latest('events').host_damage,225.5)
  assert(latest('writes').actual_delta==-225)
@@ -56,7 +69,8 @@ return function()
  assert(latest('events').host_damage==100000)
  passed('overkill clamps native HP tozero and calls checkHealthZero once; MC input cap remains1000 before scaling')
 
- setup_scale();deliver({{type=6,weapon=10,a=-0.1,b=-2},{type=6,weapon=10,a=0.1,b=2}})
+ setup_scale(5000)
+ deliver({{type=6,weapon=10,a=-0.1,b=-2},{type=6,weapon=10,a=0.1,b=2}})
  assert(state.health.current==800 and state.health.setters==2 and state.health.checks==2)
  assert(state.combat.events[1].integer==-100 and state.combat.events[2].integer==100)
  install_hooks();local sent;bridge.send_hurt=function(value) sent=value;return true end

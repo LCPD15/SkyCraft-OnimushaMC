@@ -1,6 +1,37 @@
 # MC 伤害换算与平衡 / Minecraft damage balance
 
-2026-10-07，仅适用于本地 OnimushaWotS 01.000.001 / TDB82。此文区分已实施倍率、离线验证和后续方案。其他 RE 游戏必须建立独立伤害与动作适配，不能照搬数值。
+2026-10-09 更新，仅适用于本地 OnimushaWotS 01.000.001 / TDB82。其他 RE 游戏必须建立独立伤害与动作适配，不能照搬数值。
+
+## 当前：REFramework 自定义倍率 / Live damage control
+
+REFramework → Script Generated UI → **Onimusha MC / 鬼武者 MC → Damage / 伤害设置**。
+用户指定快捷档位 **100／500／1000／2000／5000**，也可拖动到100～5000内的整数。
+100为原有伤害，五档分别等于原伤害的1／5／10／20／50倍；首次加载保持已保存的值，缺失时默认100。
+
+```text
+native requested damage = min(100000, clamp(actual MC hit, 0, 1000) × selected scale)
+```
+
+调整立即生效，写入并读回 `reframework/data/onimusha_mc_config.json` 的
+`enemy_host_damage_per_mc_point`；保存失败在面板显示，不伪报保存成功。
+只改该字段，保留其他配置和F10状态。该字段单独改变不恢复原角色、不重置地形或连接会话。
+配置文件是用户可修改的数据；日后更新不得拿旧部署指纹或备份强行覆盖用户选择。
+
+作用于EV1的MC近战、弹射物、生物攻击，保持MC实际武器／有效附魔／冷却／暴击差异。
+原生受击队列使用Attack=0、FixedAttack=换算值，两种随机动作模板不覆盖这个数值。
+原生格挡、无敌等判定仍有效，100000上限避免超过已验证的入队范围后整次拒绝。
+玩家承伤、回血、护甲减伤和TNT已转发的原生爆炸不受此滑块影响。
+
+用户已确认五个按钮可见、选档后重新展开仍保留。现场读回配置和运行状态均为1000，无保存错误；
+保留用户所选1000，没有改回默认。57组相关Lua回归通过，含面板回调、读写失败、外部热改、
+五档实际伤害、上限及承伤／回血隔离。安装与证据：`logs/damage-ui-20261009/`。
+
+**English:** Use REFramework → Script Generated UI → Onimusha MC → Damage. Presets are
+100 / 500 / 1000 / 2000 / 5000 native HP per actual MC damage point. 100 preserves previous damage.
+Changes apply immediately, persist automatically, and do not reset takeover or terrain.
+Incoming damage, healing and relayed native TNT explosions are unchanged. Each native request is capped at100000.
+
+## 以下为2026-10-07初期记录 / Earlier investigation
 
 ## 已实施：当前伤害的十倍
 
