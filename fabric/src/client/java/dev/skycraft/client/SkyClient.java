@@ -405,6 +405,7 @@ public final class SkyClient {
 			flags |= Proto.MC_SCREEN_OPEN;
 		}
 		mc.flags = flags;
+		if (minecraft.gui.screen()==null && (flags&Proto.MC_IN_WORLD)!=0 && InputBridge.soulHeld()) mc.flags|=Proto.MC_ABSORB_SOULS;
 		mc.sensitivity = minecraft.options.sensitivity().get().floatValue();
 		mc.teleportAck = holdPos == null ? teleportAck : teleportAck - 1; // not "arrived" until we are released
 		mc.guiScale = minecraft.getWindow().getGuiScale();
@@ -413,7 +414,7 @@ public final class SkyClient {
 
 		if ((flags & Proto.MC_IN_WORLD) != 0) {
 			try {
-				WorldExporter.frame(minecraft, minecraft.getDeltaTracker().getGameTimeDeltaPartialTick(false));
+				WorldExporter.frame(minecraft, minecraft.getDeltaTracker().getGameTimeDeltaPartialTick(false), mc);
 			} catch (RuntimeException e) {
 				if (exporterErrors++ < 5) {
 					SkyCraft.LOG.error("SkyCraft: world export failed", e);

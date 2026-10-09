@@ -23,7 +23,7 @@ int main(int argc,char**argv){
  while(GetTickCount64()-start<120000){
   auto now=GetTickCount64();b.heartbeat();b.publish_host(h);if(hands)b.publish_actors(std::span(&actor,1));auto c=b.collision_status();store.set_cube_context(1,1,c.mcPid,c.generation,c.connected);
   if(now-lastCol>2000){b.publish_collision(1,region,tris);lastCol=now;}
-  b.drain_render(store,32ull<<20);store.prepare_dynamic();peakModels=std::max(peakModels,store.blockModels.size());
+  b.drain_render(store,32ull<<20);store.latch_pose();store.prepare_dynamic();peakModels=std::max(peakModels,store.blockModels.size());
   if(hands&&ready&&b.overlay(hud)){
    std::uint64_t opaque=0;for(std::size_t i=3;i<hud.rgba.size();i+=4)if(hud.rgba[i]>127)opaque++;
    auto e=now-ready;if(e>19500&&e<20000)hudBefore=opaque;if(e>21500)hudAfter=opaque;

@@ -126,15 +126,34 @@ public final class AvatarExporter implements SubmitNodeCollector {
 		RAGDOLL.shown = false;
 		HANDS.shown = false;
 		lastHandsFrame=0;
+		pendingHands=null;poseAvatar=poseScene=poseHands=null;collectingPose=false;
 		nextRagdollNanos = 0;
 		movingBlocks = null;
 	}
 
-	static void frame(Minecraft minecraft, SkyAtlas atlas, float partialTick) {
+	private static ByteBuffer poseAvatar,poseScene,poseHands;
+	private static ByteBuffer pendingHands;
+	private static boolean collectingPose;
+	static void frame(Minecraft minecraft, SkyAtlas atlas, float partialTick, SkyLink.McState renderState) {
 		HANDS.atlas=atlas;
-		if(minecraft.gameRenderer.mainCamera().isDetached() || System.nanoTime()-lastHandsFrame>250_000_000L) HANDS.sendEmpty(Proto.REN_HANDS,true);
-		AVATAR.exportAvatar(minecraft, atlas, partialTick);
-		SCENE.exportScene(minecraft, atlas, partialTick);
+		// MC can report a player before its first camera has a valid FOV.
+		if(!dev.skycraft.link.RenderPoseFrame.ready(renderState)){pendingHands=null;return;}
+		poseAvatar=poseScene=null;
+		poseHands=minecraft.gameRenderer.mainCamera().isDetached() || pendingHands==null
+			? ByteBuffer.allocate(32).order(ByteOrder.LITTLE_ENDIAN) : pendingHands;
+		pendingHands=null;collectingPose=true;
+		try {
+			AVATAR.exportAvatar(minecraft, atlas, partialTick);
+			SCENE.exportScene(minecraft, atlas, partialTick);
+			if(poseAvatar!=null && poseScene!=null) {
+				var host=dev.skycraft.client.SkyClient.sky();
+				var header=dev.skycraft.link.RenderPoseFrame.header(renderState,host.worldId,host.collisionEpoch,
+					(int)ProcessHandle.current().pid(),poseAvatar.remaining(),poseScene.remaining(),poseHands.remaining());
+				var body=ByteBuffer.allocateDirect(poseAvatar.remaining()+poseScene.remaining()+poseHands.remaining());
+				body.put(poseAvatar).put(poseScene).put(poseHands).flip();
+				SkyLink.tryWriteRender(Proto.REN_POSE_FRAME,header,body);
+			}
+		} finally { collectingPose=false;poseAvatar=poseScene=poseHands=null; }
 		long now = System.nanoTime();
 		if (now >= nextRagdollNanos) {
 			nextRagdollNanos = now + 1_000_000_000L;
@@ -296,7 +315,7 @@ public final class AvatarExporter implements SubmitNodeCollector {
 		}
 		header.flip();
 		body.flip();
-		if (SkyLink.tryWriteRender(message, header, body)) {
+		if (deliver(message, header, body)) {
 			this.shown = true;
 		}
 	}
@@ -438,13 +457,13 @@ public final class AvatarExporter implements SubmitNodeCollector {
 		}
 		header.flip();
 		body.flip();
-		if (SkyLink.tryWriteRender(message, header, body)) {
+		if (deliver(message, header, body)) {
 			this.shown = true;
 		}
 	}
 
 	private void sendEmpty(int message, boolean withOrigin) {
-		if (!this.shown) {
+		if (!this.shown && message!=Proto.REN_HANDS && !collectingPose) {
 			return;
 		}
 		ByteBuffer header = ByteBuffer.allocate((withOrigin ? 24 : 0) + 8).order(ByteOrder.LITTLE_ENDIAN);
@@ -452,7 +471,17 @@ public final class AvatarExporter implements SubmitNodeCollector {
 			header.putDouble(0).putDouble(0).putDouble(0);
 		}
 		header.putInt(0).putInt(0).flip();
-		this.shown = !SkyLink.writeRender(message, header, null);
+		this.shown = !deliver(message, header, null);
+	}
+	private static boolean deliver(int message, ByteBuffer header, ByteBuffer body) {
+		if(message==Proto.REN_HANDS || (collectingPose && (message==Proto.REN_AVATAR || message==Proto.REN_SCENE))) {
+			ByteBuffer p=ByteBuffer.allocate(header.remaining()+(body==null?0:body.remaining())).order(ByteOrder.LITTLE_ENDIAN);
+			p.put(header);if(body!=null)p.put(body);p.flip();
+			if(message==Proto.REN_HANDS)pendingHands=p;
+			else if(message==Proto.REN_AVATAR)poseAvatar=p;else poseScene=p;
+			return true;
+		}
+		return SkyLink.tryWriteRender(message,header,body);
 	}
 
 	// ---- batches ---------------------------------------------------------------------------------

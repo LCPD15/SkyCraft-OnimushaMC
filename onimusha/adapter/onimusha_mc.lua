@@ -2167,7 +2167,8 @@ local function tick()
             health_current=current or 0,health_max=maximum or 0,units_per_block=cfg.units_per_block})
         state.bridge_epoch=state.epoch
     end
-    local native=bridge.status();local mc=bridge.read_mc()
+    local native=bridge.status();local mc
+    if type(bridge.read_render_mc)=='function' then mc=bridge.read_render_mc() else mc=bridge.read_mc()end
     if state.previous_native_enabled==false and native.enabled and not state.active then
         -- A deliberate off->on takeover starts at the current native pose. Never
         -- resync an active/out-of-bounds MC move to conceal missing terrain.
@@ -2304,6 +2305,7 @@ local function tick()
     if sections then
         if cfg.enable_native_section_rendering then
             sections.update({bridge=bridge,units=cfg.units_per_block,scene=addr(s),epoch=state.epoch,world_id=state.world_id,
+                render_frame=mc.frame,
                 mc_pid=native.mc_pid,generation=native.collision_generation,x=mc.x,y=mc.y,z=mc.z,
                 folder=strictcall(strictcall(state.player,"get_GameObject"),"get_Folder"),to_native=repos})
         else sections.stop() end

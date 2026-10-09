@@ -38,6 +38,7 @@ public final class InputBridge {
 		SkyLink.drainInput((type, code, a, b, c) -> dispatch(minecraft, type, code, a, b, c));
 		replayGuiCursor(minecraft);
 	}
+	public static boolean soulHeld() { return KEYS[6] || BUTTONS[3]; }
 
 	private static void replayGuiCursor(Minecraft minecraft) {
 		if (minecraft.gui.screen() == null) {
@@ -109,6 +110,13 @@ public final class InputBridge {
 			}
 			case Proto.IN_RELEASE_ALL -> releaseAll();
 			case Proto.IN_HURT -> hurt(minecraft, code, a / 100.0F, b, c);
+			case Proto.IN_SOUL_REWARD -> {
+				var server=minecraft.getSingleplayerServer();
+				if(server!=null && minecraft.player!=null) {
+					var uuid=minecraft.player.getUUID();int generation=SkyLink.generation();
+					server.execute(()->dev.skycraft.combat.SoulRewards.apply(server.getPlayerList().getPlayer(uuid),generation,b,a));
+				}
+			}
 			case Proto.IN_OPEN_MENU -> {
 				if (minecraft.gui.screen() == null && minecraft.player != null) {
 					releaseAll();

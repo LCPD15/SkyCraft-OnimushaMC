@@ -37,6 +37,11 @@ struct Mesh {
     std::uint64_t nativeRevision{};
     std::vector<NativeCube> nativeTriangles;
 };
+struct RenderPoseFrame {
+    Mesh avatar,scene,hands;
+    proto::McState state{};
+    bool ready{};
+};
 struct AtlasRect { std::uint32_t x{},y{},w{},h{}; auto operator<=>(const AtlasRect&) const = default; };
 struct NativeSectionView { Mesh remainder,depth; std::vector<std::uint8_t> mask; std::uint64_t sourceRevision{},expires{}; };
 struct DynamicNativeView {
@@ -69,6 +74,11 @@ struct RenderStore {
     std::vector<AtlasRect> animatedAtlasRects;
     std::map<SectionKey,NativeSectionView> nativeViews;
     Mesh avatar, scene,hands;
+    RenderPoseFrame pendingPose;
+    proto::McState renderPose{};
+    bool poseFrames{};
+    std::uint64_t poseReceived{},poseLatched{},poseDropped{};
+    bool latch_pose(); // game thread only: presentation never changes at Present
     DynamicNativeView nativeAvatar,nativeScene,nativeHands;
     proto::WorldEntities worldEntities{};
     std::vector<proto::ColTri> collisionTriangles;
@@ -80,6 +90,7 @@ struct RenderStore {
     std::uint64_t cubeGeneration{},cubeRevision{},staleCubeMessages{};
     bool cubeConnected{},cubeCleared{};
     std::uint64_t revision{}, invalidMessages{};
+    std::uint32_t lastInvalidType{};
     std::uint64_t instanceRevision{},instanceReceiptRevision{};
     bool instanceReceiptValid{};
     std::vector<NativeCube> instanceReceipts;

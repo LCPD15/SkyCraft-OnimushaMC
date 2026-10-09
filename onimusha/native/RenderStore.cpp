@@ -153,10 +153,17 @@ void RenderStore::clear() {
     sections.clear();sectionAtlasRects.clear();invalidate_native_views();++instanceRevision;solids.clear(); fullCubes.clear();++cubeRevision;
     blockModels.clear();modelTextures.clear();modelKeys.clear();modelBytes=0;lights.clear();
     avatar={}; scene={};hands={}; worldEntities={}; ++revision;
+    pendingPose={};renderPose={};poseFrames=false;
+}
+bool RenderStore::latch_pose() {
+    if(!pendingPose.ready)return false;
+    avatar=std::move(pendingPose.avatar);scene=std::move(pendingPose.scene);hands=std::move(pendingPose.hands);
+    renderPose=pendingPose.state;pendingPose={};++poseLatched;return true;
 }
 void RenderStore::set_cube_context(std::uint32_t world,std::uint32_t epoch,std::uint32_t pid,std::uint64_t generation,bool connected) {
     if(world!=cubeWorld||epoch!=cubeEpoch||pid!=cubePid||generation!=cubeGeneration||connected!=cubeConnected) {
         fullCubes.clear();invalidate_native_views();++cubeRevision;cubeCleared=false;
+        pendingPose={};renderPose={};poseFrames=false;avatar={};scene={};hands={};
     }
     cubeWorld=world;cubeEpoch=epoch;cubePid=pid;cubeGeneration=generation;cubeConnected=connected;
 }
@@ -187,6 +194,34 @@ bool RenderStore::consume(std::uint32_t type,std::span<const std::uint8_t> p) {
     const auto rev=++revision;
     bool ok=false;
     switch(type) {
+    case proto::kRenPoseFrame: {
+        proto::RenPoseFrame h{};
+        if(!read(p,h)||h.version!=1||h.reserved||h.avatarBytes<8||h.sceneBytes<32||h.handsBytes<32
+            ||std::uint64_t(h.avatarBytes)+h.sceneBytes+h.handsBytes>8*1024*1024
+            ||sizeof(h)+std::uint64_t(h.avatarBytes)+h.sceneBytes+h.handsBytes!=p.size())break;
+        if(!cubeConnected||!cubeCleared||h.worldId!=cubeWorld||h.epoch!=cubeEpoch||h.mcPid!=cubePid){++poseDropped;ok=true;break;}
+        const auto&s=h.state;
+        if(!s.frameCounter||s.cameraMode>2||!(s.flags&proto::kMcInWorld)
+            ||!std::isfinite(s.x)||!std::isfinite(s.y)||!std::isfinite(s.z)
+            ||!std::isfinite(s.eyeX)||!std::isfinite(s.eyeY)||!std::isfinite(s.eyeZ)
+            ||std::abs(s.x)>30'000'000||std::abs(s.y)>30'000'000||std::abs(s.z)>30'000'000
+            ||!std::isfinite(s.yaw)||!std::isfinite(s.pitch)||!std::isfinite(s.fovDeg)||s.fovDeg<=0||s.fovDeg>=180
+            ||!std::isfinite(s.cameraDistance)||s.cameraDistance<0||s.cameraDistance>128)break;
+        if(s.frameCounter<=std::max(renderPose.frameCounter,pendingPose.state.frameCounter)){++poseDropped;ok=true;break;}
+        RenderPoseFrame next;std::size_t offset=sizeof(h);
+        const auto a=p.subspan(offset,h.avatarBytes);offset+=h.avatarBytes;
+        const auto b=p.subspan(offset,h.sceneBytes);offset+=h.sceneBytes;
+        const auto c=p.subspan(offset,h.handsBytes);
+        proto::RenAvatar ah;proto::RenScene bh,ch;
+        if(!read(a,ah)||!read(b,bh)||!read(c,ch)
+            ||!mesh(next.avatar,a,sizeof(ah),ah.batchCount,ah.vertexCount,rev)
+            ||!mesh(next.scene,b,sizeof(bh),bh.batchCount,bh.vertexCount,rev)
+            ||!mesh(next.hands,c,sizeof(ch),ch.batchCount,ch.vertexCount,rev))break;
+        const double origins[]={bh.originX,bh.originY,bh.originZ,ch.originX,ch.originY,ch.originZ};
+        if(!std::all_of(std::begin(origins),std::end(origins),[](double n){return std::isfinite(n)&&std::abs(n)<=30'000'000;}))break;
+        std::copy(origins,origins+3,next.scene.origin);std::copy(origins+3,origins+6,next.hands.origin);
+        next.state=s;next.ready=true;pendingPose=std::move(next);poseFrames=true;++poseReceived;ok=true;break;
+    }
     case proto::kRenClearAll: if(p.empty()){clear();cubeCleared=cubeConnected;ok=true;} break;
     case proto::kRenAtlas: {
         proto::RenAtlas h; ok=read(p,h)&&texture(atlas,p,sizeof(h),h.width,h.height,rev);
@@ -224,9 +259,11 @@ bool RenderStore::consume(std::uint32_t type,std::span<const std::uint8_t> p) {
             sectionAtlasRects[k]=atlas_rects(m,atlas);nativeViews.erase(k);sections[k]=std::move(m);remap_instance_section(k,lease);} break;
     }
     case proto::kRenAvatar: {
+        if(poseFrames){++poseDropped;ok=true;break;}
         proto::RenAvatar h; ok=read(p,h)&&mesh(avatar,p,sizeof(h),h.batchCount,h.vertexCount,rev); break;
     }
     case proto::kRenScene: case proto::kRenHands: {
+        if(poseFrames){++poseDropped;ok=true;break;}
         proto::RenScene h; if(!read(p,h)||!std::isfinite(h.originX)||!std::isfinite(h.originY)||!std::isfinite(h.originZ))break;
         auto&target=type==proto::kRenHands?hands:scene;
         ok=mesh(target,p,sizeof(h),h.batchCount,h.vertexCount,rev);if(ok){target.origin[0]=h.originX;target.origin[1]=h.originY;target.origin[2]=h.originZ;} break;
@@ -270,7 +307,7 @@ bool RenderStore::consume(std::uint32_t type,std::span<const std::uint8_t> p) {
     case proto::kRenDug: case proto::kRenRagdoll: ok=true;break;
     default: break;
     }
-    if(!ok)++invalidMessages;
+    if(!ok){++invalidMessages;lastInvalidType=type;}
     return ok;
 }
 }

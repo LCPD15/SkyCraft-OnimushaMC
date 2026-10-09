@@ -36,6 +36,8 @@ HWND window{};
 MouseInputRouter mouseRouter;
 bool pendingGuiCursor=false;
 bool pendingRelease=false;
+std::uint32_t soulRewardSequence{};
+std::uint64_t poseAdvancedMs{};
 std::uint16_t surrogate{};
 using RegionKey=std::array<std::int32_t,6>;
 std::map<RegionKey,std::vector<proto::ColTri>> collisionRegions;
@@ -130,10 +132,34 @@ int submit(lua_State* L){
     if(enabled&&ready&&mc.cameraMode==0&&store.hands_ready(GetTickCount64()))s.flags|=proto::kSkyNativeHandsReady;
     host=s;submittedMs=GetTickCount64();const bool ok=bridge.publish_host(s)&&(!requestedReady||ready);if(!active()&&(routed||mouseRouter.known_mode()))release();lua_pushboolean(L,ok);return 1;
 }
-int read_mc(lua_State* L){
-    std::scoped_lock lock(mutex);proto::McState s{};if(!bridge.read_mc(s)){lua_pushnil(L);return 1;}lua_createtable(L,0,28);
+int push_mc(lua_State* L,const proto::McState&s){
+    lua_createtable(L,0,28);
+    bfield(L,"absorb_souls",s.flags&proto::kMcAbsorbSouls);
     nfield(L,"x",s.x);nfield(L,"y",s.y);nfield(L,"z",s.z);nfield(L,"yaw",s.yaw);nfield(L,"pitch",s.pitch);nfield(L,"eye_x",s.eyeX);nfield(L,"eye_y",s.eyeY);nfield(L,"eye_z",s.eyeZ);nfield(L,"eye_height",s.eyeHeight);nfield(L,"fov",s.fovDeg);nfield(L,"camera_mode",s.cameraMode);nfield(L,"camera_distance",s.cameraDistance);nfield(L,"flags",s.flags);nfield(L,"teleport_ack",s.teleportAck);nfield(L,"frame",double(s.frameCounter));
     bfield(L,"on_ground",s.flags&proto::kMcOnGround);bfield(L,"screen_open",s.flags&proto::kMcScreenOpen);bfield(L,"in_world",s.flags&proto::kMcInWorld);bfield(L,"dead",s.flags&proto::kMcDead);return 1;
+}
+int read_mc(lua_State* L){
+    std::scoped_lock lock(mutex);proto::McState s{};if(!bridge.read_mc(s)){lua_pushnil(L);return 1;}return push_mc(L,s);
+}
+int soul_reward(lua_State*L){
+    std::scoped_lock lock(mutex);
+    if(!active()||!lua_istable(L,1)||number(L,1,"epoch",-1)!=host.collisionEpoch||soulRewardSequence>=INT32_MAX){lua_pushboolean(L,false);return 1;}
+    const auto id=soulRewardSequence+1;
+    const bool ok=bridge.input(proto::kInSoulReward,0,std::int32_t(id),std::int32_t(host.collisionEpoch),0);
+    if(ok)soulRewardSequence=id;lua_pushboolean(L,ok);return 1;
+}
+int read_render_mc(lua_State*L){
+    std::scoped_lock lock(mutex);proto::McState live{};
+    if(!bridge.read_mc(live)){lua_pushnil(L);return 1;}
+    const auto now=GetTickCount64();
+    if(store.latch_pose())poseAdvancedMs=now;
+    if(!store.poseFrames){poseAdvancedMs=0;return push_mc(L,live);} // older sender / startup
+    // A stalled exporter must not leave a permanently frozen camera while the
+    // simulation heartbeat is still alive. Brief stalls repeat the whole pose.
+    if(!poseAdvancedMs||now-poseAdvancedMs>2000){lua_pushnil(L);return 1;}
+    if(!store.renderPose.frameCounter||store.renderPose.teleportAck!=live.teleportAck
+        ||store.renderPose.teleportAck!=host.teleportSeq){lua_pushnil(L);return 1;}
+    return push_mc(L,store.renderPose);
 }
 int drain_events(lua_State* L){
     std::scoped_lock lock(mutex);auto events=bridge.events();lua_createtable(L,int(events.size()),0);int i=1;
@@ -153,6 +179,11 @@ int status(lua_State* L){
     bfield(L,"connected",state.connected);bfield(L,"enabled",enabled);bfield(L,"ready",reason==nullptr);sfield(L,"not_ready_reason",reason?reason:"ready");
     bfield(L,"host_ready",ready);bfield(L,"collision_ready",collisionReady);bfield(L,"camera_ready",cameraReady);bfield(L,"renderer_ready",renderer::ready());
     nfield(L,"host_age_ms",submittedMs&&submittedMs<=now?double(now-submittedMs):-1);nfield(L,"mc_heartbeat_age_ms",state.heartbeatAgeMs);bfield(L,"re_ui_open",reUiOpen);bfield(L,"re_ui_sampled",reUiSampled);
+    bfield(L,"pose_frames",store.poseFrames);ifield(L,"render_pose_frame",store.renderPose.frameCounter);
+    nfield(L,"render_pose_age_ms",poseAdvancedMs&&now>=poseAdvancedMs?double(now-poseAdvancedMs):-1);
+    ifield(L,"pending_pose_frame",store.pendingPose.state.frameCounter);ifield(L,"live_mc_frame",mc.frameCounter);
+    ifield(L,"pose_received",store.poseReceived);ifield(L,"pose_latched",store.poseLatched);ifield(L,"pose_dropped",store.poseDropped);
+    ifield(L,"render_last_invalid_type",store.lastInvalidType);
     ifield(L,"mc_pid",state.mcPid);ifield(L,"collision_epoch",host.collisionEpoch);ifield(L,"collision_generation",state.generation);ifield(L,"collision_publish_seq",state.publishSeq);ifield(L,"collision_consumed_seq",state.consumedSeq);
     ifield(L,"collision_batch_end",state.batchEnd);ifield(L,"collision_head",state.head);ifield(L,"collision_tail",state.tail);bfield(L,"collision_ring_valid",state.ringValid);
     nfield(L,"collision_pack_ms",bridge.collisionPackMs);nfield(L,"collision_pack_max_ms",bridge.collisionPackMaxMs);ifield(L,"collision_pack_failures",bridge.collisionPackFailures);ifield(L,"collision_queue_failures",bridge.collisionQueueFailures);sfield(L,"collision_failure",bridge.collisionFailure.c_str());
@@ -295,16 +326,18 @@ int ack_instances(lua_State*L){
 }
 int snapshot_dynamic(lua_State*L){
     std::scoped_lock lock(mutex);store.prepare_dynamic();lua_createtable(L,0,3);
+    const auto&pose=store.poseFrames?store.renderPose:mc;
+    ifield(L,"render_frame",store.poseFrames?pose.frameCounter:0);
     ifield(L,"epoch",store.cubeEpoch);bfield(L,"ready",active()&&store.cubeCleared);bfield(L,"stable_faces",true);
     auto push=[&](const char*name,const Mesh&m,const DynamicNativeView&v,bool visible){
         lua_createtable(L,visible?int(v.faces.size()):0,0);int i=1;
         if(visible)for(const auto&f:v.faces){lua_createtable(L,0,17);ifield(L,"first",f.first);ifield(L,"kind",f.model);ifield(L,"id",f.id);ifield(L,"tint",f.tint);bfield(L,"white_flash",f.whiteFlash);
-            nfield(L,"x",f.position[0]+(name[0]=='a'?mc.x:m.origin[0]));nfield(L,"y",f.position[1]+(name[0]=='a'?mc.y:m.origin[1]));nfield(L,"z",f.position[2]+(name[0]=='a'?mc.z:m.origin[2]));
+            nfield(L,"x",f.position[0]+(name[0]=='a'?pose.x:m.origin[0]));nfield(L,"y",f.position[1]+(name[0]=='a'?pose.y:m.origin[1]));nfield(L,"z",f.position[2]+(name[0]=='a'?pose.z:m.origin[2]));
             nfield(L,"qw",f.rotation[0]);nfield(L,"qx",f.rotation[1]);nfield(L,"qy",f.rotation[2]);nfield(L,"qz",f.rotation[3]);nfield(L,"sx",f.scale[0]);nfield(L,"sy",f.scale[1]);lua_rawseti(L,-2,i++);}
         lua_setfield(L,-2,name);
     };
-    push("avatar",store.avatar,store.nativeAvatar,mc.cameraMode!=0);push("scene",store.scene,store.nativeScene,true);
-    push("hands",store.hands,store.nativeHands,mc.cameraMode==0);bfield(L,"hands_complete",store.nativeHands.faces.size()*6==store.hands.vertices.size());return 1;
+    push("avatar",store.avatar,store.nativeAvatar,pose.cameraMode!=0);push("scene",store.scene,store.nativeScene,true);
+    push("hands",store.hands,store.nativeHands,pose.cameraMode==0);bfield(L,"hands_complete",store.nativeHands.faces.size()*6==store.hands.vertices.size());return 1;
 }
 int ack_dynamic(lua_State*L){
     std::scoped_lock lock(mutex);bool ok=active()&&lua_istable(L,1)&&number(L,1,"epoch",-1)==host.collisionEpoch;
@@ -325,6 +358,8 @@ void on_lua(lua_State* L){
     const auto v=lua_version(L);if(v!=504){api->functions->log_error("OnimushaMC: incompatible Lua ABI %f",v);return;}
     static const luaL_Reg functions[]={{"submit_host",submit},{"tick_host",submit},{"read_mc",read_mc},{"get_mc_state",read_mc},{"drain_events",drain_events},{"poll_events",drain_events},{"set_enabled",set_enabled},{"send_hurt",send_hurt},{"status",status},{"publish_actors",publish_actors},{"publish_collision_tris",publish_tris},{"drain_solids",drain_solids},{"set_camera",set_camera},{nullptr,nullptr}};
     luaL_newlib(L,functions);lua_pushcfunction(L,snapshot_cubes);lua_setfield(L,-2,"snapshot_full_cubes");
+    lua_pushcfunction(L,read_render_mc);lua_setfield(L,-2,"read_render_mc");
+    lua_pushcfunction(L,soul_reward);lua_setfield(L,-2,"reward_absorbed_soul");
     lua_pushcfunction(L,snapshot_sections);lua_setfield(L,-2,"snapshot_sections");lua_pushcfunction(L,capture_section);lua_setfield(L,-2,"capture_section");
     lua_pushcfunction(L,ack_section);lua_setfield(L,-2,"ack_section");lua_pushcfunction(L,release_section);lua_setfield(L,-2,"release_section");
     lua_pushcfunction(L,snapshot_instances);lua_setfield(L,-2,"snapshot_native_instances");lua_pushcfunction(L,ack_instances);lua_setfield(L,-2,"ack_native_instances");
@@ -346,7 +381,7 @@ void on_present(){
         // Pose packets can advance between Lua's game-thread transform update and
         // Present. Reuse only same slot+appearance receipts, for at most 150ms.
         if(store.nativeAvatar.expires||store.nativeScene.expires||store.nativeHands.expires){store.prepare_dynamic();const auto now=GetTickCount64();store.partition_dynamic(store.avatar,store.nativeAvatar,now);store.partition_dynamic(store.scene,store.nativeScene,now);store.partition_dynamic(store.hands,store.nativeHands,now);}
-        renderer::render(store,overlay,mc,camera);
+        renderer::render(store,overlay,store.poseFrames?store.renderPose:mc,camera);
     }
 }
 void on_reset(){std::scoped_lock lock(mutex);renderer::reset();}

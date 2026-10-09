@@ -107,7 +107,7 @@ public final class WorldExporter {
 		}
 	}
 
-	public static void frame(Minecraft minecraft, float partialTick) {
+	public static void frame(Minecraft minecraft, float partialTick, SkyLink.McState renderState) {
 		ClientLevel level = minecraft.level;
 		if (level == null || minecraft.player == null || !SkyLink.active()) {
 			return;
@@ -124,7 +124,7 @@ public final class WorldExporter {
 			return SkyLink.tryWriteRender(Proto.REN_ATLAS_REGION, header, region.pixels());
 		});
 		exportEntities(minecraft, level, partialTick);
-		AvatarExporter.frame(minecraft, atlas, partialTick);
+		AvatarExporter.frame(minecraft, atlas, partialTick, renderState);
 	}
 
 	private static boolean resendEverything(Minecraft minecraft, ClientLevel level) {

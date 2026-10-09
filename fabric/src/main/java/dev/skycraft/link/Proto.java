@@ -129,6 +129,9 @@ public final class Proto {
 	public static final int REN_AVATAR = 5;
 	public static final int REN_SCENE = 6;
 	public static final int REN_HANDS = 13;
+	public static final int REN_POSE_FRAME = 14;
+	public static final int IN_SOUL_REWARD = 10;
+	public static final int MC_ABSORB_SOULS = 1 << 8;
 	public static final int REN_ATLAS_REGION = 7;
 	public static final int REN_LIGHTS = 8;
 	public static final int REN_RAGDOLL = 9;

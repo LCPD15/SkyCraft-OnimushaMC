@@ -5,6 +5,138 @@
 local CONTROL='onimusha_combat_inventory_control.json'
 local OUTPUT='onimusha_combat_inventory_status.json'
 local state={frame=0,metadata={}}
+
+-- Natural soul-absorption observation. No command injection, reward writes,
+-- skipped calls, or replay of a success notification. Owner is resolved afresh.
+do
+    local control='onimusha_soul_probe_control.json'
+    local output='onimusha_soul_probe_status.json'
+    local q={frame=0,armed=false,events={},counts={},metadata={},errors={}}
+    local function scalar(v)
+        if type(v)=='boolean' or type(v)=='string' then return v end
+        if type(v)=='number' and v==v and math.abs(v)<math.huge then return v end
+    end
+    local function describe(t)
+        local n=t:get_full_name();if q.metadata[n] then return end
+        local r={fields={},methods={}};q.metadata[n]=r
+        for _,f in ipairs(t:get_fields() or {})do
+            local v={name=f:get_name(),type=f:get_type():get_full_name(),static=f:is_static()}
+            if f:is_static() and t:get_parent_type() and t:get_parent_type():get_full_name()=='System.Enum' then
+                local ok,value=pcall(f.get_data,f,nil);if ok then v.value=scalar(value)end
+            end
+            r.fields[#r.fields+1]=v
+        end
+        for _,m in ipairs(t:get_methods() or {})do
+            local p={};for _,a in ipairs(m:get_param_types() or {})do p[#p+1]=a:get_full_name()end
+            r.methods[#r.methods+1]={name=m:get_name(),params=p,returns=m:get_return_type():get_full_name()}
+        end
+    end
+    local function values(o)
+        local t=o:get_type_definition();describe(t);local r={}
+        for _,f in ipairs(t:get_fields() or {})do
+            if not f:is_static() then
+                local name=f:get_type():get_full_name()
+                local parent=f:get_type():get_parent_type()
+                if name=='System.Boolean' or name=='System.Int32' or name=='System.UInt32' or name=='System.Single'
+                    or (parent and parent:get_full_name()=='System.Enum') then r[f:get_name()]=scalar(f:get_data(o))end
+            end
+        end
+        return r
+    end
+    local function event(kind,data)
+        q.events[#q.events+1]={frame=q.frame,time=os.clock(),kind=kind,data=data}
+        if #q.events>256 then table.remove(q.events,1)end
+    end
+    local function resolve()
+        assert(sdk.get_tdb_version()==82,'Only TDB82')
+        assert(_G.onimusha_mc and not _G.onimusha_mc.status().enabled,'Keep F10 off')
+        local pm=assert(sdk.get_managed_singleton('app.PlayerManager'))
+        assert(pm:call('isPlayerReady',false),'Player not ready')
+        local info=pm:call('getControllingPlayerInfo')
+        assert(info:call('get_Valid') and info:call('get_CharacterValid'),'Invalid player')
+        local p=info:call('get_Character');local go=p:call('get_GameObject')
+        assert(go:call('get_Valid'),'Invalid player object')
+        local e=p:call('get_CharacterEntityHolder'):call('get_Entity')
+        local o=e:call('get_SoulAbsorption')
+        assert(o and o:get_type_definition():get_full_name()=='app.cPlayerSoulAbsorptionSupporter','Unexpected soul owner')
+        assert(o:get_field('_PlayerCharacterEntity'):get_address()==e:get_address(),'Soul owner mismatch')
+        return o
+    end
+    local function install()
+        local t=assert(sdk.find_type_definition('app.cPlayerSoulAbsorptionSupporter'));describe(t)
+        local specs={
+            {'updateCommand',{'app.cPlayerCommandResult'},'System.Void'},
+            {'requestSoulAbsorptionAction',{'System.Boolean'},'System.Void'},
+            {'requestAbsorption',{},'System.Boolean'},
+            {'updateBeforeAction',{},'System.Void'},
+            {'updateAfterAction',{},'System.Void'},
+            {'lateUpdate',{},'System.Void'},
+            {'executeSoulAbsorptionSuccess',{'app.SoulBase'},'System.Void'},
+            {'addSoulAbsorption',{'app.SoulDef.ID_Fixed','System.Int32','System.Boolean'},'System.Void'},
+        }
+        local seen={}
+        for _,spec in ipairs(specs)do
+            local name=spec[1];local m=assert(t:get_method(name),'Missing soul method '..name)
+            assert(not m:is_static() and m:get_num_params()==#spec[2] and m:get_return_type():get_full_name()==spec[3],'Soul signature mismatch')
+            for i,a in ipairs(m:get_param_types() or {})do assert(a:get_full_name()==spec[2][i],'Soul parameter mismatch')end
+            local ptr=sdk.to_int64(m:get_function());assert(ptr and ptr>0 and not seen[ptr],'Invalid/duplicate soul hook')
+            seen[ptr]=true
+            sdk.hook(m,function(args)
+                if not q.armed or not q.owner or sdk.to_int64(args[2])~=q.owner then return end
+                local ok,err=pcall(function()
+                    local o=resolve();assert(o:get_address()==q.owner,'Soul owner changed')
+                    q.counts[name]=(q.counts[name] or 0)+1
+                    local r={before=values(o)}
+                    if name=='updateCommand' then
+                        local cmd=sdk.to_managed_object(args[3]);assert(cmd and cmd:get_type_definition():get_full_name()==spec[2][1],'Unexpected command type')
+                        r.command=values(cmd)
+                        -- Preserve transitions, not hundreds of identical idle frames.
+                        local key=tostring(r.before._IsCommandAbsorb)..':'..tostring(r.before._IsAbsorption)
+                        for _,k in ipairs({'_IsSoulAbsorption','_SoulAbsorption','_IsCommandAbsorb'})do key=key..':'..tostring(r.command[k])end
+                        if q.command_key==key then return end;q.command_key=key
+                    elseif name=='requestSoulAbsorptionAction' then
+                        r.argument=sdk.to_int64(args[3])~=0
+                        if q.action_argument==r.argument then return end;q.action_argument=r.argument
+                    elseif name=='executeSoulAbsorptionSuccess' then
+                        local soul=sdk.to_managed_object(args[3]);assert(soul and soul:get_type_definition():is_a('app.SoulBase'),'Unexpected soul')
+                        r.soul=values(soul);r.address=soul:get_address()
+                    elseif name=='addSoulAbsorption' then
+                        r.soul_type=sdk.to_int64(args[3]);r.amount=sdk.to_int64(args[4]);r.flag=sdk.to_int64(args[5])~=0
+                    elseif q.counts[name]>8 then return end
+                    event(name,r)
+                end)
+                if not ok then q.armed=false;q.error=tostring(err)end
+            end,function(ret)return ret end)
+        end
+        for _,n in ipairs({'app.SoulDef.ID_Fixed','app.SoulDef.SOUL_SIZE','app.SoulDef.SoulAbsorptionType_Fixed','app.cPlayerCommandResult'})do
+            local td=sdk.find_type_definition(n);if td then describe(td)end
+        end
+        q.installed=true
+    end
+    re.on_application_entry('LateUpdateBehavior',function()
+        q.frame=q.frame+1
+        if q.frame%30==1 then
+            local c=json.load_file(control)
+            if not c or c.enabled~=true then q.armed=false
+            elseif c.id~=q.id then
+                q.id=c.id;q.error=nil;q.owner=nil;q.events={};q.counts={};q.command_key=nil;q.action_argument=nil
+                local ok,err=pcall(function()local o=resolve();q.owner=o:get_address();if not q.installed then install()end;q.armed=true end)
+                if not ok then q.armed=false;q.error=tostring(err)end
+            end
+        end
+        if q.armed then
+            local ok,err=pcall(function()
+                local o=resolve();assert(o:get_address()==q.owner,'Soul owner changed')
+                local v=values(o);local k=tostring(v._IsCommandAbsorb)..':'..tostring(v._IsAbsorption)..':'..tostring(v._AbsorptionType)
+                if k~=q.state_key then q.state_key=k;event('state',v)end
+                q.current=v
+            end)
+            if not ok then q.armed=false;q.error=tostring(err)end
+        end
+        if q.id and q.frame%60==0 then json.dump_file(output,q)end
+    end)
+    re.on_script_reset(function()q.armed=false;q.owner=nil end)
+end
 local function typ(o) return o and o:get_type_definition():get_full_name() end
 local function call(o,n,...)
     assert(o and o:get_type_definition():get_method(n),'Missing getter '..n)

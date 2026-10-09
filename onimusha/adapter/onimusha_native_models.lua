@@ -222,6 +222,10 @@ end
 local function update_dynamic(c)
     if type(c.bridge.snapshot_native_dynamic)~='function' then return end
     local s=c.bridge.snapshot_native_dynamic()
+    if s and s.render_frame and s.render_frame~=0 and c.render_frame and s.render_frame~=c.render_frame then
+        q.pose_mismatch=(q.pose_mismatch or 0)+1;return
+    end
+    q.render_frame=s and s.render_frame
     if not s or not s.ready or s.epoch~=c.epoch then
         local keys={};for k in pairs(dynamics)do keys[#keys+1]=k end
         for _,k in ipairs(keys)do dynamic_remove(k)end;return
@@ -477,6 +481,7 @@ function api.status()
         if r.diagnostic and #diagnostics<24 then diagnostics[#diagnostics+1]=r.diagnostic end
     end
     return{phase=q.phase,error=q.error,count=count,ready=q.ready or 0,desired=q.desired,created=q.created,removed=q.removed,
+        render_frame=q.render_frame,pose_mismatch=q.pose_mismatch or 0,
         receipts=q.receipts,waiting=q.waiting,resources_ready=resources_ready,resources_loading=resources_loading,lights=light_count,light_limit=64,
         resource_errors=resource_errors,resource_diagnostics=diagnostics,pause=q.pause,foreground=q.foreground,worker=q.worker,light_error=q.light_error,dynamic_enabled=dynamic_settings.enabled,dynamic_settings=dynamic_settings,dynamic_reused=q.dynamic_reused or 0,dynamic_created=q.dynamic_created or 0,dynamic_removed=q.dynamic_removed or 0,dynamic_objects=q.dynamic_objects or 0,dynamic_disabled_reason=not dynamic_settings.enabled and "staged_dynamic_control_disabled" or nil,dynamic_error=q.dynamic_error,dynamic_ready=q.dynamic_ready or 0,dynamic_streams=q.dynamic_streams,dynamic_scale_samples=q.dynamic_scale_samples,owned_total=owned_count(),owned_limit=2560,warm_retiring=#q.warm_retired,limit=1280,radius=128,mode='automatic_models',live_conversion=true,shared_collision_objects=false,nonfull_display_only=true}
 end

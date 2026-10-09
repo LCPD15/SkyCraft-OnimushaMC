@@ -6,6 +6,7 @@
 #include "FullCubeTests.hpp"
 #include "NativeSectionTests.hpp"
 #include "DynamicModelsTests.hpp"
+#include "PoseFrameTests.hpp"
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -112,5 +113,6 @@ int wmain(int argc,wchar_t** argv){
     omc::tests::full_cube_tests(check);
     omc::tests::native_section_tests(check);
     omc::tests::dynamic_models_tests(check);
+    omc::tests::pose_frame_tests(check);
     std::printf("%d failure(s)\n",failures);return failures?1:0;
 }

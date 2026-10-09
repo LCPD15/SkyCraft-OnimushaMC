@@ -111,6 +111,7 @@ namespace skycraft::proto
 		kMcDead = 1u << 5,
 		kMcSwimming = 1u << 6,
 		kMcFlying = 1u << 7,
+		kMcAbsorbSouls = 1u << 8, // Onimusha: C or right mouse held, no GUI
 	};
 
 	struct McState
@@ -192,6 +193,7 @@ namespace skycraft::proto
 		kInHurt = 7,         // Skyrim hit the player: code = HurtKind, a = Skyrim damage * 100, b = attacker FormID, c = HurtFlags
 		kInOpenMenu = 8,     // open Minecraft's pause/options menu
 		kInLookDelta = 9,    // raw mouse pixel delta a=dx, b=dy; MC applies its sensitivity/inversion
+		kInSoulReward = 10,  // a=unique session receipt, b=collision epoch; one per native absorbed soul
 	};
 
 	enum HurtKind : std::uint16_t
@@ -371,11 +373,19 @@ namespace skycraft::proto
 		                      // were dug out of Skyrim's world (its geometry there is gone); 0 = none
 		kRenFullCubes = 12,   // Onimusha: exact unit-cube collision shapes, context-tagged section replacement.
 		kRenHands = 13,       // RenScene layout: camera-relative posed first-person hands, absolute MC origin.
+		kRenPoseFrame = 14,   // Onimusha: atomic camera + avatar/scene/hands, RenPoseFrame then three meshes.
 		kRenRagdoll = 9,      // RenAvatar + RenBatch[] + RenVertex[]: the player's body standing still,
 		                      // relative to the feet and facing +Z, split into its parts (RenBatch
 		                      // flags bits 8-11: RagdollPart). Sent about once a second while alive;
 		                      // Skyrim hangs the parts on its ragdoll when the player dies.
 	};
+
+	struct RenPoseFrame {
+		std::uint32_t version, worldId, epoch, mcPid;
+		std::uint32_t avatarBytes, sceneBytes, handsBytes, reserved;
+		McState state;
+	};
+	static_assert(sizeof(RenPoseFrame)==232);
 
 	struct RenSolids
 	{
