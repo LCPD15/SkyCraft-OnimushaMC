@@ -755,7 +755,7 @@ local function restore_camera_dither()
     local ok,err=pcall(function()
         if record.obj:get_field('_IsDestroy')==true then return end
         strictcall(record.obj,'setEnable(System.Boolean, System.Single, via.curve.EaseType)',record.original,0.0,0)
-        assert(strictcall(record.obj,'get_IsEnable')==record.original,'Camera dither restore readback failed')
+        assert(record.obj:get_field('_Enable')==record.original,'Camera dither restore readback failed')
     end)
     local diagnostic=state.hooks and state.hooks.camera_dither
     if ok then state.dither_restore=nil
@@ -2080,12 +2080,15 @@ local function install_hooks()
                 local obj=assert(sdk.to_managed_object(args[2]))
                 assert(typename(obj)=='app.mcCamSys_DitherDepth','Unexpected camera dither owner')
                 assert(not state.dither_restore,'Previous camera dither restore still pending')
-                local original=strictcall(obj,'get_IsEnable')
+                -- get_IsEnable also reports an unfinished ease transition. setEnable(0s)
+                -- starts that transition; onLateUpdateEnd consumes it later in this call.
+                -- Only _Enable is the setter's actual Boolean, and the baseline to restore.
+                local original=obj:get_field('_Enable')
                 assert(type(original)=='boolean','Invalid camera dither baseline')
                 state.dither_restore={obj=obj,original=original}
                 strictcall(obj,'setEnable(System.Boolean, System.Single, via.curve.EaseType)',false,0.0,0)
-                assert(strictcall(obj,'get_IsEnable')==false,'Camera dither disable readback failed')
-                r.suppressed=r.suppressed+1;r.last_request_frame=state.frame
+                assert(obj:get_field('_Enable')==false,'Camera dither disable readback failed')
+                r.last_request_frame=state.frame;r.error=nil
             end)
             if not ok then r.error=tostring(err) end
         end,function(retval)
@@ -2097,6 +2100,7 @@ local function install_hooks()
                     local param=record.obj:get_field('_CurrentParam')
                     r.near_alpha=param and param:get_field('NearAlpha')
                     r.far_alpha=param and param:get_field('FarAlpha')
+                    if r.enabled_during_consumer==false then r.suppressed=r.suppressed+1 end
                 end)
                 if not ok then r.error=tostring(err) end
                 restore_camera_dither()

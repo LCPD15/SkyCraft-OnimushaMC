@@ -27,7 +27,7 @@ public abstract class AuthoritativeHealthMixin implements dev.skycraft.combat.Ho
 
 	@Inject(method = "tickDeath", at = @At("HEAD"), cancellable = true)
 	private void onimusha$nativeOwnsRespawn(CallbackInfo ci) {
-		if (HostHealth.mirrored((LivingEntity) (Object) this)) {
+		if (HostHealth.ownsLife((LivingEntity) (Object) this)) {
 			((LivingEntity) (Object) this).deathTime = 0;
 			ci.cancel();
 		}

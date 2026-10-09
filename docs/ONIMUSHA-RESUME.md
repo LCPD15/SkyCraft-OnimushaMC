@@ -5,7 +5,7 @@
 
 ## 最新结果与下一步
 
-### 2026-10-10 原生死亡已通过；本地角色移除及渐隐后续修正待实测
+### 2026-10-10 移动恢复已确认；完整死亡重试与近距离渐隐待实测
 
 原生卡死现场已恢复：HP归零但停留在MediumDamage，需要对当前加载的死亡动作发起标准requestBaseAction，
 用户已确认正式Lua自动死亡／原生重试成功。正式Lua按确认致死→解除接管并恢复→动态查找死亡动作→一次请求处理。
@@ -14,11 +14,20 @@ MC的Gui.setScreen(null)会绕过旧DeathScreen参数拦截，已补内部条件
 真实MC客户端维护自测已通过界面拦截、旧界面清理、dead/deathTime恢复，HP与玩家对象不变；
 但用户发现重试后只能转视角：LocalPlayer独立覆盖tickDeath，第20tick仍会移除客户端角色，父类拦截无效。
 已补本地override拦截，真实MC连续30次死亡tick后实体仍保留、恢复后isAlive=true检查通过。
-当前MC进程50720，日志live-local-death-20261010.stdout.log；loader generation12。
-渐隐requestDisable虽记录3783次调用仍无效，现改为原生onLateUpdateEnd前setEnable(false)、后恢复准确原值，
-记录计算期间Enable和Near/FarAlpha，失败保留恢复记录。旧isDitherEnableCamera hook从未被调用。
-最新问题已发用户：解除原生暂停，F10确认WASD／跳跃和近距离渐隐，回安全位置保持开启。
-近距离视觉及最新完整致死→重试→重新移动仍待用户实测，不要提前记为通过。
+随后用户仍不能移动，真实快照确认客户端HP20但isRemoved=true/RemovalReason.KILLED。
+旧tickDeath保护依赖当前血量权威标志／心跳，原生死亡读档时可暂时失效，30tick常连自测漏掉了此路径。
+现用HostLifeLease按MC玩家／世界／内置服务器身份持有生命周期，读档缺失HP标志与暂时断联均不释放；
+换MC玩家、世界或服务器／MC世界断开则清除。原生回血与伤害仍要求新鲜有效的原生状态，不能用旧数据回血。
+78项JVM测试通过；真实客户端30正常+60缺失权威+60断联死亡tick均保留实体，恢复后isAlive=true。
+用户已明确确认WASD与跳跃正常；完整死亡→原生重试→F10再移动仍待复测。
+当前MC进程75596，日志live-life-lease-sword-20261010.stdout.log；loader generation14。
+渐隐现于onLateUpdateEnd前setEnable(false)、后恢复准确_Enable字段；get_IsEnable包含未结束插值，不能作即时字段读回。
+用户移动期间2254次实际consumer抑制成功，Enable=false、Near/FarAlpha=1，无错误；近敌视觉待用户确认。
+用户追加补给已完成：背包现有7组不足上限的物品补满（附魔金苹果、南瓜、铁块、TNT、两组箭、门），
+空余Slot0加入钻石剑：锋利V、横扫III、火焰附加II、耐久III、经验修补I。
+按MC26.3实际附魔JSON验证最高等级、支持物品、互斥关系；不改其他物品组件／HP／XP。
+补给前正常关闭MC，88个世界文件备份验证，原子写入后自动重连；收据logs/death-dither-20261010/inventory-sword.json。
+鬼武者仍运行／暂停，接管关闭。无需Reset Scripts或游戏重启。
 详细原因、验证及测试夹具故障记录见 [死亡与渐隐](ONIMUSHA-DEATH-AND-DITHER.md)。
 
 ### 2026-10-09 REFramework 五档伤害倍率已安装并验收

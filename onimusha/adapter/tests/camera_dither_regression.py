@@ -12,12 +12,12 @@ local function td(_) return {get_method=function(_,n)
  assert(n=='onLateUpdateEnd');return {get_function=function() return 123 end} end} end
 local function typename(o) return o.type end
 local function strictcall(o,n,v,t,e)
- if n=='get_IsEnable' then return o.enabled end
+ if n=='get_IsEnable' then return o.enabled or o.transition end
  assert(n=='setEnable(System.Boolean, System.Single, via.curve.EaseType)')
  assert(type(v)=='boolean' and t==0 and e==0)
  if v and o.fail_restore then error('temporary restore failure') end
  if o.silent then return end
- writes=writes+1;o.enabled=v
+ writes=writes+1;o.enabled=v;o.transition=true
 end
 sdk={to_managed_object=function(o) return o end,hook=function(_,a,b) pre=a;post=b end}
 writes=0
@@ -26,13 +26,16 @@ local function fail_open() state.active=false;restore_camera_dither() end
 ''' + source[start:end] + r'''
 local obj={type='app.mcCamSys_DitherDepth',enabled=true,get_field=function(self,n)
  if n=='_IsDestroy' then return self.destroyed or false end
+ if n=='_Enable' then return self.enabled end
  assert(n=='_CurrentParam');return {get_field=function() return 1 end} end}
 assert(pre({[2]=obj})==nil and post(99)==99 and writes==0)
 state.active=true;assert(pre({[2]=obj})==nil and not obj.enabled and state.dither_restore.original==true)
+assert(strictcall(obj,'get_IsEnable')==true and not state.hooks.camera_dither.error)
+obj.transition=false -- original consumer finishes the zero-duration transition
 assert(post(99)==99 and obj.enabled and not state.dither_restore)
 assert(state.hooks.camera_dither.enabled_during_consumer==false and state.hooks.camera_dither.near_alpha==1)
 print('PASS active consumer sees disabled dither and always returns original result; baseline restored')
-obj.enabled=false;pre({[2]=obj});post(5);assert(not obj.enabled and not state.dither_restore)
+obj.enabled=false;pre({[2]=obj});obj.transition=false;post(5);assert(not obj.enabled and not state.dither_restore)
 state.active=false;local old=writes;pre({[2]=obj});post(1);assert(writes==old)
 print('PASS an originally disabled camera stays disabled; inactive callback has no writes')
 state.active=true;obj.enabled=true;obj.silent=true;pre({[2]=obj});post(6)

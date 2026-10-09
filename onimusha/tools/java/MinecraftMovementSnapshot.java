@@ -24,7 +24,7 @@ public final class MinecraftMovementSnapshot {
     }
     static String player(Object p) {
         StringBuilder out=new StringBuilder("type="+p.getClass().getName()+"\n");
-        for(String name:new String[]{"getHealth","isDeadOrDying","isAlive","getPose","position","getDeltaMovement","onGround","isSleeping","isPassenger","getUUID","getId"}) {
+        for(String name:new String[]{"getHealth","isRemoved","getRemovalReason","isDeadOrDying","isAlive","getPose","position","getDeltaMovement","onGround","isSleeping","isPassenger","getUUID","getId"}) {
             try {out.append(name).append('=').append(p.getClass().getMethod(name).invoke(p)).append('\n');}
             catch(Exception e){out.append(name).append("=<unavailable>\n");}
         }

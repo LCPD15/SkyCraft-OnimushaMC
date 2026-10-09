@@ -48,11 +48,18 @@ public final class MinecraftDeathSyncCheck {
                 Field deathTime = living.getField("deathTime");
                 Field currentScreen = gui.getClass().getDeclaredField("screen"); currentScreen.setAccessible(true);
                 Field linked = sky.getDeclaredField("linked"); linked.setAccessible(true);
+                Field hostFlags = hostState.getClass().getField("flags");
+                int savedFlags = hostFlags.getInt(hostState);
+                boolean savedLinked = linked.getBoolean(null);
+                Field leaseField = sky.getDeclaredField("nativeLife"); leaseField.setAccessible(true);
+                Object lease = leaseField.get(null);
+                var leaseUpdate = lease.getClass().getMethod("update", Object.class, Object.class, Object.class, boolean.class);
                 var setScreen = gui.getClass().getMethod("setScreen", screen);
                 float hp = (float) getHealth.invoke(player);
                 boolean wasDead = dead.getBoolean(player); int time = deathTime.getInt(player);
                 Object oldScreen = currentScreen.get(gui);
                 require(hp > 0 && !wasDead, "Wait for healthy native HP mirror before check");
+                require(!(boolean) living.getMethod("isRemoved").invoke(player), "Restart MC to replace the previously removed client before this check");
                 try {
                     setHealth.invoke(player, 0f); dead.setBoolean(player, true); deathTime.setInt(player, 17);
                     var tickDeath = local.getDeclaredMethod("tickDeath"); tickDeath.setAccessible(true);
@@ -63,11 +70,26 @@ public final class MinecraftDeathSyncCheck {
                     Object stale = deathScreen.getConstructor(component, boolean.class, local).newInstance(null, false, player);
                     setScreen.invoke(gui, stale);
                     require(!deathScreen.isInstance(currentScreen.get(gui)), "Explicit DeathScreen escaped guard");
+                    // Native retry temporarily has no HP object, then may miss heartbeats. The MC
+                    // world/player stay the same throughout: neither transition may release life.
+                    for (int phase = 0; phase < 2; phase++) {
+                        hostFlags.setInt(hostState, 0);
+                        linked.setBoolean(null, phase == 0);
+                        for (int tick = 0; tick < 60; tick++) tickDeath.invoke(player);
+                        require((boolean) sky.getMethod("nativeOwnsDeath").invoke(null), "Lost life ownership in native transition " + phase);
+                        require(!(boolean) living.getMethod("isRemoved").invoke(player), "Native transition removed the local player " + phase);
+                        require(deathTime.getInt(player) == 0, "Native transition advanced death ticks " + phase);
+                        setScreen.invoke(gui, new Object[]{null});
+                        require(!deathScreen.isInstance(currentScreen.get(gui)), "Transition opened death screen " + phase);
+                    }
+                    hostFlags.setInt(hostState, savedFlags);
+                    linked.setBoolean(null, savedLinked);
                     // Open through the real GUI lifecycle (Fabric initializes its per-screen events there).
                     // A constructor plus direct screen assignment is not a valid initialized Screen.
                     linked.setBoolean(null, false);
+                    leaseUpdate.invoke(lease, null, null, null, false); // simulate a pre-fix unowned client
                     try { setScreen.invoke(gui, stale); }
-                    finally { linked.setBoolean(null, true); }
+                    finally { linked.setBoolean(null, savedLinked); }
                     require(deathScreen.isInstance(currentScreen.get(gui)), "Legacy-screen fixture did not open");
                     setHealth.invoke(player, hp);
                     var sync = sky.getDeclaredMethod("synchronizeNativeLife", minecraft); sync.setAccessible(true);
@@ -78,8 +100,9 @@ public final class MinecraftDeathSyncCheck {
                     require(!deathScreen.isInstance(currentScreen.get(gui)), "Stale DeathScreen survived retry");
                     require((float) getHealth.invoke(player) == hp, "Recovery changed HP");
                     require(minecraft.getField("player").get(mc) == player, "Recovery replaced player/inventory owner");
-                    result = "PASS 30 local death ticks retain live entity; implicit screen; explicit screen; old screen cleanup; dead flag and timer reset; HP and player identity unchanged";
+                    result = "PASS 30 normal + 60 unavailable-authority + 60 disconnected local death ticks retain live entity; implicit/explicit screen guards; old screen cleanup; native retry restores isAlive and death timer; HP and player identity unchanged";
                 } finally {
+                    hostFlags.setInt(hostState, savedFlags); linked.setBoolean(null, savedLinked);
                     setHealth.invoke(player, hp); dead.setBoolean(player, wasDead); deathTime.setInt(player, time);
                     setScreen.invoke(gui, oldScreen);
                 }

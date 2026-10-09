@@ -28,6 +28,7 @@ public final class SkyClient {
 	private static final SkyLink.SkyState sky = new SkyLink.SkyState();
 	private static final SkyLink.McState mc = new SkyLink.McState();
 	private static volatile boolean linked;
+	private static final dev.skycraft.combat.HostLifeLease nativeLife = new dev.skycraft.combat.HostLifeLease();
 	private static boolean tookOver;
 	private static boolean windowHidden;
 	private static int appliedViewportW, appliedViewportH;
@@ -68,18 +69,21 @@ public final class SkyClient {
 		return sky;
 	}
 
-	/** Health ownership is independent of F10/readiness, so native retry can unlock MC again. */
+	/** Native death/load clears readiness/HP flags temporarily; it does not release this MC life. */
 	public static boolean nativeOwnsDeath() {
-		var player = Minecraft.getInstance().player;
-		return linked && sky.authoritativeHealth() && player != null
-			&& dev.skycraft.combat.HostHealth.mirrored(player);
+		var minecraft = Minecraft.getInstance();
+		var player = minecraft.player;
+		var server = minecraft.getSingleplayerServer();
+		boolean claim = linked && sky.authoritativeHealth() && player != null
+			&& dev.skycraft.combat.HostHealth.ownsPlayerSession(player.getUUID(), server);
+		return nativeLife.update(player, minecraft.level, server, claim);
 	}
 
 	private static void synchronizeNativeLife(Minecraft minecraft) {
 		if (!nativeOwnsDeath()) return;
 		var player = minecraft.player;
 		// Wait for the server's positive HP packet, never heal from a button or a stale MC snapshot.
-		if (!sky.loading() && !sky.hostDead()
+		if (linked && sky.authoritativeHealth() && !sky.loading() && !sky.hostDead()
 			&& dev.skycraft.combat.HostHealthMath.valid(sky.healthCurrent, sky.healthMax)
 			&& sky.healthCurrent > 0 && player.getHealth() > 0) {
 			if (((dev.skycraft.combat.HostLifeMirror) player).onimusha$clearDeathState()) {
@@ -96,6 +100,8 @@ public final class SkyClient {
 	/** Start of Minecraft.runTick: pull state and input from Skyrim before anything else runs. */
 	public static void beginFrame() {
 		SkyLink.poll();
+		// Also release a stale lease on MC disconnect while the native link is unavailable.
+		nativeOwnsDeath();
 		quitWithSkyrim(Minecraft.getInstance());
 		if (START_HIDDEN && !startedHidden) {
 			startedHidden = true;

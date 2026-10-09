@@ -4,6 +4,7 @@ import dev.skycraft.link.Proto;
 import dev.skycraft.link.SkyLink;
 import java.util.UUID;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
@@ -17,12 +18,20 @@ public final class HostHealth {
 	private record Snapshot(float hearts, int generation, int epoch, boolean dead, boolean playable) {}
 	private static volatile Snapshot snapshot;
 	private static volatile UUID owner;
+	private static volatile ServerPlayer lifeOwner;
 	private static final ThreadLocal<Boolean> SYNCING = ThreadLocal.withInitial(() -> false);
 	private static final ThreadLocal<Boolean> HEALING = ThreadLocal.withInitial(() -> false);
 	private HostHealth() {}
 
 	public static void init() {
 		ServerTickEvents.END_SERVER_TICK.register(HostHealth::tick);
+		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+			if (lifeOwner != null && lifeOwner.level().getServer() == server) {
+				lifeOwner = null;
+				owner = null;
+				snapshot = null;
+			}
+		});
 	}
 
 	public static boolean mirrored(Entity entity) {
@@ -30,7 +39,16 @@ public final class HostHealth {
 	}
 
 	public static boolean intercepts(ServerPlayer player) {
-		return mirrored(player) && !SYNCING.get();
+		return ownsLife(player) && !SYNCING.get();
+	}
+
+	/** A loading scene or expired heartbeat must not delete the native host's MC player. */
+	public static boolean ownsLife(Entity entity) { return entity == lifeOwner; }
+
+	/** Claim only this integrated server's host, never a matching UUID in an unrelated world. */
+	public static boolean ownsPlayerSession(UUID id, MinecraftServer server) {
+		ServerPlayer player = lifeOwner;
+		return player != null && player.getUUID().equals(id) && player.level().getServer() == server;
 	}
 
 	/** Only observation: do not infer native ownership from an old owner UUID and heartbeat alone. */
@@ -85,6 +103,7 @@ public final class HostHealth {
 				continue;
 			}
 			owner = player.getUUID();
+			lifeOwner = player;
 			float health = HostHealthMath.minecraftHealth(host.healthCurrent, host.healthMax);
 			snapshot = new Snapshot(health, SkyLink.generation(), host.collisionEpoch, host.hostDead() || health == 0,
 				host.inGame() && !host.loading() && !host.menuOpen());
