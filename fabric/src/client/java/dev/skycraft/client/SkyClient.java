@@ -68,6 +68,31 @@ public final class SkyClient {
 		return sky;
 	}
 
+	/** Health ownership is independent of F10/readiness, so native retry can unlock MC again. */
+	public static boolean nativeOwnsDeath() {
+		var player = Minecraft.getInstance().player;
+		return linked && sky.authoritativeHealth() && player != null
+			&& dev.skycraft.combat.HostHealth.mirrored(player);
+	}
+
+	private static void synchronizeNativeLife(Minecraft minecraft) {
+		if (!nativeOwnsDeath()) return;
+		var player = minecraft.player;
+		// Wait for the server's positive HP packet, never heal from a button or a stale MC snapshot.
+		if (!sky.loading() && !sky.hostDead()
+			&& dev.skycraft.combat.HostHealthMath.valid(sky.healthCurrent, sky.healthMax)
+			&& sky.healthCurrent > 0 && player.getHealth() > 0) {
+			if (((dev.skycraft.combat.HostLifeMirror) player).onimusha$clearDeathState()) {
+				SkyCraft.LOG.info("Onimusha: restored mirrored client player after native revival");
+			}
+		}
+		if (minecraft.gui.screen() instanceof net.minecraft.client.gui.screens.DeathScreen) {
+			// Gui's implicit dead-player branch is suppressed too; this cannot reopen DeathScreen.
+			minecraft.gui.setScreen(null);
+			SkyCraft.LOG.info("Onimusha: dismissed stale Minecraft death screen; native retry owns respawn");
+		}
+	}
+
 	/** Start of Minecraft.runTick: pull state and input from Skyrim before anything else runs. */
 	public static void beginFrame() {
 		SkyLink.poll();
@@ -120,6 +145,7 @@ public final class SkyClient {
 		hideWindowOnce(minecraft);
 		applyViewportSize(minecraft);
 		MirrorWorld.openWhenReady(minecraft);
+		synchronizeNativeLife(minecraft);
 
 		if (sky.menuOpen() || sky.loading()) {
 			InputBridge.releaseAll();

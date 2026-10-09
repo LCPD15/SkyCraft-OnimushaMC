@@ -4,6 +4,7 @@
   "compatibilityLevel": "JAVA_25",
   "client": [
     "HostDeathScreenMixin",
+    "HostLocalPlayerDeathMixin",
     "CameraZoomMixin",
     "ChatComponentMixin",
     "ClientLevelAccessor",

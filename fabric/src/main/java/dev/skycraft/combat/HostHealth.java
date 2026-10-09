@@ -91,6 +91,13 @@ public final class HostHealth {
 			SYNCING.set(true);
 			try {
 				player.setHealth(health);
+				// SKY_IN_GAME is native control readiness, also false in menus/terrain preparation.
+				// Authoritative positive HP must revive the mirror before takeover can become ready.
+				if (!host.loading() && !host.hostDead() && health > 0) {
+					if (((HostLifeMirror) player).onimusha$clearDeathState()) {
+						dev.skycraft.SkyCraft.LOG.info("Onimusha: restored mirrored server player after native revival");
+					}
+				}
 			} finally {
 				SYNCING.set(false);
 			}

@@ -1730,6 +1730,84 @@ local function reject_combat_event(record,reason)
     record.outcome="rejected";record.reason=reason
     combat_count(record.group,"rejected",reason)
 end
+local function resolve_player_death_action(player)
+    -- Resolve against the current player's loaded actions, never fixed category/index
+    -- values: those vary with the equipped native fighting style.
+    local controller=assert(strictcall(player,'get_BaseActionController'),'Missing base action controller')
+    local list=assert(controller:get_field('_ActionList'),'Missing loaded player actions')
+    local count=list:get_field('_size')
+    assert(type(count)=='number' and count>=1 and count<=32,'Invalid action category count')
+    local groups=assert(list:get_field('_items'))
+    local current=strictcall(player,'get_BaseCurrentAction')
+    local style=current and attempt(function() return current:get_field('_Style') end)
+    local selected,best=nil,-1
+    for category=0,count-1 do
+        local group=groups:get_element(category)
+        if group then
+            local actions=group:get_elements()
+            assert(#actions<=2048,'Invalid loaded action count')
+            for i,action in ipairs(actions) do
+                if action and typename(action):match('%.cDie$')
+                    and action:get_type_definition():is_a('app.PlayerCommonAction.cDieBase')
+                    and same(action:get_field('_OwnerCharacter'),player) then
+                    local score=style~=nil and action:get_field('_Style')==style and 2 or
+                        (typename(action)=='app.PlayerBasicDamageAction.cDie' and 1 or 0)
+                    if score>best then
+                        best=score;selected={category=category,index=i-1,type=typename(action)}
+                    end
+                end
+            end
+        end
+    end
+    assert(selected,'No loaded native player death action')
+    local id=ValueType.new(assert(td('ace.ACTION_ID')))
+    id:set_field('_Category',selected.category);id:set_field('_Index',selected.index)
+    -- Resolve and validate the constructed ID before requesting a transition.
+    local check=strictcall(player,'getActionFromID_Base(ace.ACTION_ID)',id)
+    assert(check and typename(check)==selected.type and same(check:get_field('_OwnerCharacter'),player),
+        'Death action ID/owner mismatch')
+    return id,selected
+end
+local function process_death_handoff(bridge,current,dying,menu,scripted)
+    local pending=state.death_pending
+    if not pending then return end
+    state.death_diagnostic=pending
+    if pending.player~=addr(state.player) or pending.health~=addr(state.health) or pending.epoch~=state.epoch then
+        pending.outcome='cancelled_owner_changed';state.death_pending=nil;return
+    end
+    if type(current)~='number' then return end
+    if current>0 then
+        pending.outcome='native_revived';state.death_pending=nil;state.health_remainder=0;return
+    end
+    -- Unseal inputs and release camera/draw/physics before requesting the native
+    -- animation. An inactive bridge alone cannot finish an asynchronous MC death.
+    fail_open('Native death owns control');bridge.set_enabled(false)
+    if restoration_pending() or menu or scripted then pending.outcome='waiting_for_restore';return end
+    local entity=strictcall(strictcall(state.player,'get_CharacterEntityHolder'),'get_Entity')
+    local die=strictcall(entity,'get_DieSupporter')
+    local action=strictcall(state.player,'get_BaseCurrentAction')
+    local native_action=action and action:get_type_definition():is_a('app.PlayerCommonAction.cDieBase')
+    if dying or native_action or strictcall(die,'get_IsRequested') or strictcall(die,'get_IsRequestRevive') then
+        pending.outcome='native_flow_observed';pending.observed_frame=state.frame;return
+    end
+    if pending.attempted then return end -- No duplicate request, including ambiguous SDK errors.
+    local id,selection=resolve_player_death_action(state.player)
+    local normal=assert(td('app.CharacterDeadType.TYPE'):get_field('NORMAL')):get_data(nil)
+    local damage=assert(td('app.CharacterDef.ACTION_REQUEST_CATEGORY'):get_field('DAMAGE')):get_data(nil)
+    assert(normal==0 and damage==4,'Unsupported Onimusha death enum values')
+    pending.action=selection;pending.attempted=true;pending.request_frame=state.frame
+    local ok,err=pcall(function()
+        if strictcall(entity,'get_DeadType')==-1 then
+            -- Explicit nil argument: generic strictcall's unpack drops trailing nil.
+            die:call('reqForceDie(app.CharacterDeadType.TYPE, via.GameObject)',normal,nil)
+        end
+        pending.accepted=strictcall(state.player,
+            'requestBaseAction(ace.ACTION_ID, app.CharacterDef.ACTION_REQUEST_CATEGORY)',id,damage)
+        assert(pending.accepted==true,'Native death action request was rejected')
+    end)
+    pending.outcome=ok and 'requested_native_death' or 'request_failed'
+    if not ok then pending.error=tostring(err);error(err,0) end
+end
 local function set_native_health(health,delta,event_record)
     local current=strictcall(health,"get_Health")
     local maximum=strictcall(health,"get_MaxHealth")
@@ -1765,6 +1843,13 @@ local function set_native_health(health,delta,event_record)
     if write.readback_matches then
         write.outcome=write.actual_delta==0 and "noop" or "applied"
         combat_count("writes",write.outcome,write.outcome=="noop" and "clamped_or_unchanged" or nil)
+        if current>0 and write.after==0 and same(health,state.health) and state.player then
+            -- The original damage reaction ran before MC armour settled the HP.
+            -- setHealth/checkHealthZero notify HP listeners, but do not select a
+            -- player death animation: otherwise MediumDamage can stay stuck forever.
+            state.death_pending={player=addr(state.player),health=addr(health),epoch=state.epoch,
+                lethal_frame=state.frame,outcome='queued'}
+        end
     else
         write.outcome="unconfirmed";write.reason=write.readback_error and "readback_failed" or "readback_mismatch"
         combat_count("writes","unconfirmed",write.reason)
@@ -1967,12 +2052,25 @@ local function install_hooks()
     state.control_hooks_attempted=true
     -- Camera-distance dither only. Death/stealth/material transparency keep their own logic.
     local dither=td('app.mcCamSys_DitherDepth')
-    local dither_method=dither and dither:get_method('isDitherEnableCamera(ace.CameraControllerBase)')
+    local dither_method=dither and dither:get_method('onLateUpdateEnd')
     if dither_method then
-        state.hooks.camera_dither={attempted=true,calls=0,suppressed=0}
-        sdk.hook(dither_method,function()end,function(retval)
+        -- isDitherEnableCamera exists but is inlined on TDB82 (zero observed calls).
+        -- The real late-update consumes requestDisable once per frame, then restores
+        -- its own enable state on the next frame without a request. Do not skip it.
+        state.hooks.camera_dither={attempted=true,calls=0,suppressed=0,
+            method='onLateUpdateEnd/requestDisable',address=tostring(dither_method:get_function())}
+        sdk.hook(dither_method,function(args)
             local r=state.hooks.camera_dither;r.calls=r.calls+1
-            if state.active then r.suppressed=r.suppressed+1;return sdk.to_ptr(0) end
+            if not state.active then return end
+            local ok,err=pcall(function()
+                local obj=assert(sdk.to_managed_object(args[2]))
+                assert(typename(obj)=='app.mcCamSys_DitherDepth','Unexpected camera dither owner')
+                -- TDB82 EaseType.Linear=0. Zero blend time prevents a fade transition.
+                strictcall(obj,'requestDisable(System.Single, via.curve.EaseType)',0.0,0)
+                r.suppressed=r.suppressed+1;r.last_request_frame=state.frame
+            end)
+            if not ok then r.error=tostring(err) end
+        end,function(retval)
             return retval
         end)
     end
@@ -2198,6 +2296,7 @@ local function tick()
     end
     local current,maximum=call(state.health,"get_Health"),call(state.health,"get_MaxHealth")
     local valid_hp=type(current)=="number" and type(maximum)=="number" and maximum>0
+    if cfg.runtime_stage=="C" then process_death_handoff(bridge,current,dying,menu,scripted) end
     if state.bridge_epoch~=state.epoch then
         bridge.submit_host({ready=false,world_id=state.world_id,epoch=state.epoch,
             teleport_seq=state.teleport_seq,x=m.x,y=m.y,z=m.z,yaw=host_angles.yaw,pitch=host_angles.pitch,
@@ -2285,9 +2384,9 @@ local function tick()
             not native.renderer_ready and "Native renderer not ready" or
             not camera_basis_verified and "Unverified camera basis; only local -Z is supported" or
             menu and "Native menu owns control" or scripted and "Scripted scene owns control" or
-            dying and "Native death owns control" or not alive and "Waiting for Minecraft world" or
-            not valid_hp and "Native HP unavailable" or
-            current<=0 and "Native HP depleted" or not cfg.install_control_hooks and "Native control hooks disabled" or
+            dying and "Native death owns control" or not valid_hp and "Native HP unavailable" or
+            current<=0 and "Native HP depleted" or not alive and "Waiting for Minecraft world" or
+            not cfg.install_control_hooks and "Native control hooks disabled" or
             not state.bindings.root_motion and "Root motion binding not ready" or
             teleport_pending and not native_covered and native_coverage_reason or
             teleport_pending and "Minecraft teleport acknowledgment pending" or
@@ -2375,6 +2474,7 @@ re.on_application_entry("LateUpdateBehavior",function()
         json.dump_file("onimusha_mc_status.json",{status=state.status,active=state.active,bindings=state.bindings,
             runtime_stage=cfg.runtime_stage,diagnostic_only=cfg.diagnostic_only,
             enemy_host_damage_per_mc_point=cfg.enemy_host_damage_per_mc_point,damage_setting_error=state.damage_setting_error,
+            death_handoff=state.death_diagnostic or state.death_pending,
             control_hooks_enabled=cfg.install_control_hooks,terrain_queries_enabled=cfg.enable_terrain_queries,
             native_block_colliders_enabled=cfg.enable_native_block_colliders,
             health_hook_tests_enabled=cfg.enable_health_hook_tests,
