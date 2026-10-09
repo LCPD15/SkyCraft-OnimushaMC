@@ -5,6 +5,30 @@
 
 ## 最新结果与下一步
 
+### 2026-10-09 22:36 热更新吸魂决策时序与 MC 碰撞查询排除，待测试
+
+用户已确认动态位置闪动修复；吸魂无效，且边界外接管失效、返回恢复。
+游戏 PID30324、MC43960、worker99724 继续运行原世界。用户已回安全位置并关闭 F10，
+三份 Lua 热更成功（loader generation2），没有更换 DLL/JAR、没有重启或改动存档。
+
+边界证据：原生地形刷新14次失败，原因 `Unsupported native area query primitive: boxes=5`，
+现场 MC 原生碰撞方块 total=5，旧地形覆盖区之外触发 foot/body/support gate。
+现通过 `onimusha_native_blocks.query_terrain()` 仅在同步地形查询期间临时禁用本 MOD 持有的碰撞组件，
+查询返回前恢复全部原始 enabled 状态；异常也恢复，绝不将 MC 方块烘焙成拆除后仍存在的地形。
+未知原生非三角形仍拒绝认证，不能为隐藏错误而去掉覆盖范围检查。
+热更后 F10 关闭状态查询4753三角形、零非三角形、消费成功，无失败。
+待验证开启接管、存在 MC 方块时查询也能排除这些碰撞；如仍失败，查看 last_query_masked 和 query.boxes。
+
+吸魂新增 `updateAfterActionFromBoneEntity` 决策前再次写入当前 C／右键状态，
+记录真实 held_frames、bone_injections、overwritten、原生 absorption_type/absorbing/request。
+无需重新采集四种魂；只按真实成功回调发奖励。Lua 早期输入覆盖／恢复、碰撞屏蔽异常恢复、
+完整地形消费与失败保留覆盖区等回归已通过。尚未宣称实际吸魂成功。
+
+备份 `runtime/test-backups/soul-boundary-hotfix-20261009-223601`；
+证据和安装收据 `logs/soul-boundary-20261009/`，三项部署 SHA 已更新。
+已询问用户按 F10 后测试 C 和右键吸魂，再回安全位置保持接管，等待答复。
+先读取 soul_status 和 MC stdout 奖励回执，再单独请求复测原来边界；不要让用户手动 Reset。
+
 ### 2026-10-09 晚：整帧同步与吸魂奖励候选，待游戏内验收
 
 用户已确认上一版 TNT／像素清晰度／本地缓存三项均正常；新的问题是移动时动态物体位置闪烁。

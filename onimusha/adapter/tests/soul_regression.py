@@ -4,7 +4,7 @@ from lupa import LuaRuntime
 lua=LuaRuntime(unpack_returned_tuples=True)
 lua.execute(r'''
 local methods={};hooks={};callbacks={};enabled=true;held=true;rewarded=0;refs=0
-local names={'updateBeforeAction','lateUpdate','executeSoulAbsorptionSuccess'}
+local names={'updateBeforeAction','updateAfterActionFromBoneEntity','lateUpdate','executeSoulAbsorptionSuccess'}
 for i,name in ipairs(names)do
  local params=name=='executeSoulAbsorptionSuccess' and {{get_full_name=function()return 'app.SoulBase'end}} or {}
  methods[name]={is_static=function()return false end,get_return_type=function()return{get_full_name=function()return'System.Void'end}end,
@@ -14,7 +14,7 @@ local td={get_method=function(_,name)return methods[name]end,get_full_name=funct
 go={call=function(_,n)assert(n=='get_Valid');return true end}
 entity={get_address=function()return 20 end,call=function(_,n)assert(n=='get_OwnerCharacter');return player end}
 soul={flag=false,get_address=function()return 30 end,get_type_definition=function()return td end,
- get_field=function(self,n)if n=='_PlayerCharacterEntity'then return entity end;assert(n=='_IsCommandAbsorb');return self.flag end,
+ get_field=function(self,n)if n=='_PlayerCharacterEntity'then return entity end;if n=='_IsCommandAbsorb'then return self.flag end;return false end,
  set_field=function(self,n,v)assert(n=='_IsCommandAbsorb');self.flag=v end,
  add_ref=function()refs=refs+1 end,release=function()refs=refs-1 end}
 local ec=entity.call;entity.call=function(self,n)if n=='get_SoulAbsorption'then return soul end;return ec(self,n)end
@@ -34,6 +34,11 @@ lua.execute((Path(__file__).resolve().parents[1]/'onimusha_soul.lua').read_text(
 lua.execute(r'''
 callbacks.tick();assert(hooks.updateBeforeAction)
 hooks.updateBeforeAction.pre({[2]=30});assert(soul.flag and refs==1)
+-- The game reads its sealed command AFTER updateBeforeAction. Reproduce that
+-- overwrite before the actual absorption decision in the bone-entity pass.
+soul.flag=false
+hooks.updateAfterActionFromBoneEntity.pre({[2]=30});assert(soul.flag and refs==1)
+hooks.updateAfterActionFromBoneEntity.post(0)
 hooks.executeSoulAbsorptionSuccess.pre({[2]=30});hooks.executeSoulAbsorptionSuccess.post(99)
 assert(rewarded==0);callbacks.tick();assert(not soul.flag and refs==0 and rewarded==1)
 callbacks.tick();assert(rewarded==1)

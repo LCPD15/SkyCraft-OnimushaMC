@@ -1,7 +1,7 @@
 -- Onimusha TDB82. Native movement/effects/rewards remain native; each actual
 -- successful absorption additionally gives one bounded MC reward receipt.
 -- MOD制作：LCPD15/LCPD拉灯
-local q={frame=0,injected=0,successes=0,rewards=0,pending={},installed=false}
+local q={frame=0,injected=0,held_frames=0,bone_injections=0,overwritten=0,successes=0,rewards=0,pending={},installed=false}
 local ledger
 local function bridge_context()
     local b=_G.onimusha_mc;if not b or type(b.reward_absorbed_soul)~='function' then return end
@@ -43,19 +43,41 @@ local function install()
         for i,p in ipairs(m:get_param_types() or {})do assert(p:get_full_name()==params[i],'Soul argument mismatch')end
         assert(sdk.to_int64(m:get_function())>0,'Missing soul method body');return m
     end
-    sdk.hook(method('updateBeforeAction',{}),function(args)
+    local function inject(args,phase)
         local ok,err=pcall(function()
-            restore()
+            if phase=='before' then restore()end
             local b,n,mc=bridge_context();if not b then return end
             local o=owner();if sdk.to_int64(args[2])~=o:get_address()then return end
             local previous=o:get_field('_IsCommandAbsorb');assert(type(previous)=='boolean','Soul command is not boolean')
-            o:add_ref();ledger={object=o,original=previous}
+            if ledger and ledger.object:get_address()~=o:get_address()then restore()end
+            if not ledger then o:add_ref();ledger={object=o,original=previous}end
+            if phase=='bone' then
+                q.bone_injections=q.bone_injections+1
+                if mc.absorb_souls==true and not previous then q.overwritten=q.overwritten+1 end
+            end
             o:set_field('_IsCommandAbsorb',mc.absorb_souls==true)
             assert(o:get_field('_IsCommandAbsorb')==(mc.absorb_souls==true),'Soul command write readback')
             q.held=mc.absorb_souls==true;q.injected=q.injected+1;q.epoch=n.collision_epoch
+            if phase=='bone' and q.held then q.held_frames=q.held_frames+1;q.last_held_frame=q.frame end
         end)
         if not ok then q.error=tostring(err);restore()end
-    end,function(ret)return ret end)
+    end
+    sdk.hook(method('updateBeforeAction',{}),function(args)inject(args,'before')end,function(ret)return ret end)
+    -- The native command/action pass lies between updateBeforeAction and the
+    -- bone-entity pass. Apply the live input at the actual absorption decision,
+    -- after native command sealing, rather than relying on the early write.
+    sdk.hook(method('updateAfterActionFromBoneEntity',{}),function(args)inject(args,'bone')end,function(ret)
+        if ledger then
+            local ok,err=pcall(function()
+                q.native={command=ledger.object:get_field('_IsCommandAbsorb'),
+                    absorption_type=ledger.object:get_field('_AbsorptionType'),
+                    absorbing=ledger.object:get_field('_IsAbsorption'),
+                    request=ledger.object:get_field('_IsRequestSoulAbsorptionAction')}
+            end)
+            if not ok then q.error=tostring(err)end
+        end
+        return ret
+    end)
     sdk.hook(method('lateUpdate',{}),nil,function(ret)restore();return ret end)
     sdk.hook(method('executeSoulAbsorptionSuccess',{'app.SoulBase'}),function(args)
         local storage=thread.get_hook_storage();storage.onimusha_soul_success=nil

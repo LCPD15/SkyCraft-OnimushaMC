@@ -125,10 +125,43 @@ function api.stop() clear('disabled') end
 function api.busy() return next(q.blocks)~=nil or #q.retired>0 end
 -- Display borrows the already owned collider object; its lifetime remains here.
 function api.display_owner(x,y,z) return q.blocks[x..':'..y..':'..z] end
+-- Terrain belongs to the RE scene; MC blocks are already authoritative MC
+-- blocks. Do not recapture their temporary RE colliders as permanent ground.
+-- This is one synchronous query with no yield/physics step; restore each exact
+-- prior enabled state on both success and failure before returning any result.
+function api.query_terrain(fn)
+    local saved={}
+    local ok,result=pcall(function()
+        for _,b in pairs(q.blocks)do
+            if b.colliders and call(b.go,'get_Valid')then
+                local enabled=call(b.colliders,'get_Enabled')
+                assert(type(enabled)=='boolean','Owned collider enabled state unavailable')
+                if enabled then
+                    saved[#saved+1]=b.colliders
+                    call(b.colliders,'set_Enabled',false)
+                    assert(call(b.colliders,'get_Enabled')==false,'Owned collision query mask failed')
+                end
+            end
+        end
+        return fn()
+    end)
+    local errors={}
+    for _,o in ipairs(saved)do
+        local restored,err=pcall(function()
+            call(o,'set_Enabled',true)
+            assert(call(o,'get_Enabled')==true,'Owned collision query restore failed')
+        end)
+        if not restored then errors[#errors+1]=tostring(err)end
+    end
+    q.last_query_masked=#saved
+    assert(#errors==0,table.concat(errors,'; '))
+    if not ok then error(result,0)end
+    return result
+end
 function api.status()
     local count,ready=0,0;for _,b in pairs(q.blocks) do count=count+1;if b.ready then ready=ready+1 end end
     return {phase=q.phase,error=q.error,count=count,ready=ready,retiring=#q.retired,desired=#q.order,
-        total=q.total,truncated=q.truncated,revision=q.revision,radius=16,limit=MAX_CUBES,full_cubes_only=true}
+        total=q.total,truncated=q.truncated,revision=q.revision,radius=16,limit=MAX_CUBES,full_cubes_only=true,last_query_masked=q.last_query_masked}
 end
 _G.onimusha_native_blocks=api
 re.on_application_entry('LateUpdateBehavior',function()

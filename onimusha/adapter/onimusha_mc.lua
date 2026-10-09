@@ -1078,8 +1078,12 @@ local function start_collision(s,p,native)
         local filter=call(state.cc,"get_FilterInfo")
         if not filter then error("Player CharacterController collision filter unavailable") end
         strictcall(query,"set_FilterInfo",filter)
-        local result=pin_managed(sdk.call_native_func(system,td("via.physics.System"),"getAreaPrimitive",query),
-            "via.physics.GetAreaPrimitiveResult")
+        local function query_scene()
+            return pin_managed(sdk.call_native_func(system,td("via.physics.System"),"getAreaPrimitive",query),
+                "via.physics.GetAreaPrimitiveResult")
+        end
+        local blocks=_G.onimusha_native_blocks
+        local result=blocks and blocks.query_terrain and blocks.query_terrain(query_scene) or query_scene()
         local count=strictcall(result,"get_NumTriangles")
         local counts={boxes=strictcall(result,"get_NumBoxes"),spheres=strictcall(result,"get_NumSpheres"),capsules=strictcall(result,"get_NumCapsules")}
         state.query_diagnostic={allocated=true,triangles=count,boxes=counts.boxes,spheres=counts.spheres,capsules=counts.capsules,

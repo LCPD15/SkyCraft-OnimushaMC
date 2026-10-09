@@ -20,7 +20,7 @@ local prefab=object('via.Prefab',{
   col=object('via.physics.Collider',{get_Shape=function()return object('via.physics.BoxShape',{})end,
    get_GameObject=function()return go end,get_Ready=function()return true end})
   cs=object('via.physics.Colliders',{get_Ready=function()return true end,getCollidersCount=function()return 1 end,
-   ['getCollider(System.UInt32)']=function(i)assert(i==0)return col end,set_Enabled=function(v)b.enabled=v end})
+   ['getCollider(System.UInt32)']=function(i)assert(i==0)return col end,set_Enabled=function(v)b.enabled=v end,get_Enabled=function()return b.enabled end})
   go=object('via.GameObject',{get_Valid=function()return b.valid end,set_Name=function(n)b.name=n end,
    ['getComponent(System.Type)']=function(t)assert(t=='via.physics.Colliders')return cs end})
   b.go=go;objects[#objects+1]=b;return go
@@ -55,6 +55,16 @@ userdata_ready=true;advance(3);assert(created==0 and standby)
 prefab_ready=true;advance(2);assert(created==1 and onimusha_native_blocks.status().ready==1)
 assert(objects[1].p.x==.5 and objects[1].p.y==2.5 and objects[1].p.z==3.5)
 print('PASS asynchronous resource readiness and calibrated unit-box placement')
+local result=onimusha_native_blocks.query_terrain(function()
+ assert(not objects[1].enabled);return 'native scene only'
+end)
+assert(result=='native scene only' and objects[1].enabled)
+local ok=pcall(onimusha_native_blocks.query_terrain,function()assert(not objects[1].enabled);error('query failed')end)
+assert(not ok and objects[1].enabled)
+objects[1].enabled=false
+onimusha_native_blocks.query_terrain(function()assert(not objects[1].enabled)end)
+assert(not objects[1].enabled);objects[1].enabled=true
+print('PASS terrain query masks only owned MC collision, restores after exceptions and preserves predisabled state')
 advance(12);assert(created==1)
 sample.cubes={};sample.total=0;sample.revision=2;advance(6)
 assert(destroyed==1 and not objects[1].enabled and onimusha_native_blocks.busy(),tostring(destroyed)..' '..tostring(objects[1].enabled)..' '..tostring(last_error))
