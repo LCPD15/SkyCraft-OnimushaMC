@@ -3,7 +3,7 @@ from pathlib import Path
 from lupa.lua54 import LuaRuntime
 
 source = (Path(__file__).resolve().parents[1] / "onimusha_mc.lua").read_text(encoding="utf-8-sig")
-helpers = source[source.index("local function capture_player_input_seals()"):source.index("local function reload_config()")]
+helpers = source[source.index("local function capture_player_input_seals("):source.index("local function reload_config()")]
 reset = source[source.index("re.on_script_reset(function()"):source.index('log.info("[OnimushaMC] adapter loaded;')]
 lua = LuaRuntime(unpack_returned_tuples=True)
 run = lua.execute(r"""
@@ -53,6 +53,9 @@ return function()
  assert(input.value==false and not state.input_seals and input_writes==1 and fov_writes==0)
  assert(not restoration_pending() and box_calls==1 and clear_calls==1 and bridge_calls==0)
  print('PASS downgraded stage A reset restores input-only pending owner')
+ input,camera=setup(true,false,false);state.ui_input_seals=state.input_seals;state.input_seals=nil;reset_callback()
+ assert(input.value==false and not state.ui_input_seals and input_writes==1 and not restoration_pending())
+ print('PASS downgraded stage A reset also restores pending MC-GUI input owners')
  input,camera=setup(false,true,false);reset_callback()
  assert(camera.fov==41 and state.camera.fov==75 and not state.fov_restore and not state.original_fov)
  assert(fov_writes==1 and input_writes==0 and draw_writes==0 and not restoration_pending())
@@ -69,4 +72,4 @@ return function()
 end
 """)
 run()
-print("RESET_RESTORE_REGRESSION_OK 5 actual-Lua-5.4 cases")
+print("RESET_RESTORE_REGRESSION_OK 6 actual-Lua-5.4 cases")

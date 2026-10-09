@@ -26,6 +26,15 @@ public final class InputBridge {
 	private static int cursorLogs;
 	private static int chatOpeningCharacter;
 	private static long chatOpenedAt;
+	private static int replayDepth;
+	public static long ignoredLocalCallbacks;
+
+	/** A visible preview also receives SDL input. Only host replay may change bridge controls. */
+	public static boolean rejectLocalInput() {
+		boolean reject = SkyClient.tookOver() && replayDepth == 0;
+		if (reject) ignoredLocalCallbacks++;
+		return reject;
+	}
 
 	private InputBridge() {
 	}
@@ -35,8 +44,16 @@ public final class InputBridge {
 	}
 
 	public static void drain(Minecraft minecraft) {
-		SkyLink.drainInput((type, code, a, b, c) -> dispatch(minecraft, type, code, a, b, c));
-		replayGuiCursor(minecraft);
+		replayDepth++;
+		try {
+			if (minecraft.gui.screen() == null && minecraft.player != null && !minecraft.mouseHandler.isMouseGrabbed()) {
+				// Window focus changes release vanilla's logical grab. Hardware capture remains
+				// disabled by InputConstantsMixin; host input needs the logical grab restored.
+				minecraft.mouseHandler.grabMouse();
+			}
+			SkyLink.drainInput((type, code, a, b, c) -> dispatch(minecraft, type, code, a, b, c));
+			replayGuiCursor(minecraft);
+		} finally { replayDepth--; }
 	}
 	public static boolean soulHeld() { return KEYS[6] || BUTTONS[3]; }
 
@@ -190,6 +207,10 @@ public final class InputBridge {
 
 	/** Lift every key and button we think is held (focus moved to Skyrim, link dropped, ...). */
 	public static void releaseAll() {
+		replayDepth++;
+		try { releaseAllReplayed(); } finally { replayDepth--; }
+	}
+	private static void releaseAllReplayed() {
 		Minecraft minecraft = Minecraft.getInstance();
 		long handle = minecraft.getWindow().handle();
 		for (int sc = 0; sc < KEYS.length; sc++) {

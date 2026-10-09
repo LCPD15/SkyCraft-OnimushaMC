@@ -19,7 +19,7 @@ public abstract class LevelRendererMixin {
 		cancellable = true
 	)
 	private void skycraft$skipLevel(CallbackInfo ci) {
-		if (SkyClient.linked()) {
+		if (SkyClient.linked() && !dev.skycraft.client.LocalWindowPreview.active()) {
 			ci.cancel();
 		}
 	}

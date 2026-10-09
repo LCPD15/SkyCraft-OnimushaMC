@@ -5,6 +5,55 @@
 
 ## 最新结果与下一步
 
+### 2026-10-10 可见 MC 窗口黑屏／放置输入修正版，等待原场景验收
+
+用户确认同一场景离屏模式可以放置，因此按可见窗口引入的回归排查，未调整场景或建筑高度。
+LevelRenderer 原来在桥接时完全跳过，ShowWindow 只显示 HUD。现在可见模式保留 MC 世界预览，
+在世界后处理结束后保存预览，单独清空透明层绘制手与 GUI；FrameExporter 读回透明层后才合成窗口。
+修正清屏 Vector4f 的默认 w=1 陷阱，显式设 alpha=0。隐藏模式继续使用原路径。
+SDL 窗口键鼠回调与宿主注入输入隔离，只有 InputBridge 重放范围内的回调能改变桥接控制；
+无 GUI 时恢复因焦点变化被释放的逻辑鼠标抓取，仍不抢占真实硬件鼠标。MC 可见窗口是预览，输入在鬼武者完成。
+
+验证：Fabric build／78 项 JVM 测试通过。一次性世界 WindowSmoke-v4 中宿主右键放置成功，
+打开／关闭背包后第二次放置成功，物品数量32→30；模拟本地 SDL 右键被拦截，releaseMouse 后逻辑抓取恢复。
+GPU 截图已确认窗口显示石头与金块；宿主透明层310682/409920像素为全透明，其余主要是手、盾、HUD。
+第一次透明度断言错误地要求80%，大盾和手占约四分之一画面；按该测试场景调整为60%，并保留原始计数。
+最终 host.json passed=1、invalid_packets=0。隔离世界均已保存退出，未修改真实世界。
+真实世界89个文件与备份逐项SHA256一致；备份 runtime/test-backups/window-preview-20261010-032310。
+证据 logs/window-preview-20261010/，日志 window-preview-smoke-v3/v4.stdout.log；新增只限隔离世界的焦点测试工具。
+新版 JAR 已安装，原 MC 世界重连 PID46916；鬼武者PID30324、转换器84528，保持暂停／接管关闭。
+待用户关闭暂停、F10后复测放置／拆除、MC窗口预览和聊天不误触原生菜单。不可将隔离成功写作原场景已验收。
+手动启动入口与文档仍见下方；MC窗口不绘制鬼武者地形，文档已更新说明。
+
+随后用户确认创造可放、认为生存不可放，吃东西与拉弓正常。现场读取确认实际 GameType.ADVENTURE、mayBuild=false；
+03:48:40 日志明确切到 Adventure，修正前备份玩家数据也为 playerGameType=2、mayBuild=0。
+因此原场景放置失败的确定原因是冒险模式的正常规则，不是窗口可见、场景高度或原生地面。
+通过集成服务器线程调用 ServerPlayer.setGameMode(SURVIVAL)，客户端与服务器均读回 SURVIVAL／mayBuild=true；
+没有直接改运行中的存档，也没有给冒险模式绕过建造权限。恢复工具限制指定目录与原世界。
+证据 live-mode.txt、restore-survival.txt、live-survival.txt；实际MC窗口截图已确认已有铁块正常显示。
+仍待用户确认恢复 Survival 后的放拆与聊天。现役JAR SHA256 E6E54E0EC9217C58E639AC26E6F5FDB0A52BFBF154046F4E44614DBD6A8D80D1。
+
+### 2026-10-10 MC 聊天输入隔离已安装；可见窗口与手动启动入口已完成
+
+用户报告 MC 聊天键会触发原生菜单。WndProc 消费消息与 sealAllPlayer 不覆盖原生 UI 的独立输入。
+现场反射与只读反汇编确认 GameInputManager.update() / sealAllUI，以及三个 UI 数组的 _SealAll／_IsSealed。
+正式 Lua 在 manager.update 后，根据当前 MC screen_open/in_world、存活、接管和连接状态封锁
+_UIInput、_PadUIInput、_MkbUIInput；关闭 GUI、断联、死亡、F10 关闭或 REFramework UI 打开时恢复原值。
+UI 与玩家输入使用独立恢复记录，关闭 MC GUI 不会误解除仍在接管的玩家输入锁。
+已自动热更 generation16，id 21b851cbbe1543b896b99dd41e6c0f52；没有 DLL/JAR 变更。
+现场已捕获3组UI／597键且sealed=true，update后钩子上万次执行无错误；仍待用户确认打字不误触与关闭后正常。
+随后现场接管已关闭，UI的600项原值恢复完成、pending_records=0、无错误；证据ui-input-runtime-restored.json。
+输入生命周期、恢复重试、死亡交接、视觉恢复、初次定位、碰撞交接及渐隐回归均通过。
+旧的定位／碰撞测试夹具漏了上轮死亡和渐隐依赖，已补隔离stub后通过；未据此更改运行逻辑。
+只读采样证据 logs/chat-input-20261010/。
+
+MC 已正常保存退出后以可见窗口重连，当前PID101968；原生PID30324、转换器84528。
+新入口 G:\游戏MOD\0_自己做的Mod\鬼武者\MC\启动并连接MC.cmd，等效 G:\Onimusha_MC_mod\Start-OnimushaMC.cmd。
+调用tools/Connect-OnimushaMC.ps1，固定现有世界，ShowWindow/QuitWithHost/SwordBlocking，复用MC和转换器。
+Windows PowerShell实际启动与重复启动复用均已验证；PrepareOnly也会生成参数文件，不应在MC运行中用于日常检查。
+当前实例26.3/Fabric，不能直接安装所查到的旧版Create；复杂机械绘制与原生碰撞未做兼容验证。
+操作与兼容说明见 [启动与操作](ONIMUSHA-PLAY-GUIDE.md)。本轮没有再改库存／存档。
+
 ### 2026-10-10 移动恢复已确认；完整死亡重试与近距离渐隐待实测
 
 原生卡死现场已恢复：HP归零但停留在MediumDamage，需要对当前加载的死亡动作发起标准requestBaseAction，

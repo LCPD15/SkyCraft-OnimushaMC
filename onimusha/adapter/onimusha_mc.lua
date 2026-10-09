@@ -310,10 +310,12 @@ local function set_boxes_enabled(enabled)
     end
     state.boxes_enabled=enabled
 end
-local function capture_player_input_seals()
-    if state.input_seals then
-        if state.input_seals.restore_pending then error("Input restoration remains pending",0) end
-        return state.input_seals
+local function capture_player_input_seals(ui)
+    local slot=ui and 'ui_input_seals' or 'input_seals'
+    local diagnostic=ui and 'ui_input_seal_diagnostic' or 'input_seal_diagnostic'
+    if state[slot] then
+        if state[slot].restore_pending then error("Input restoration remains pending",0) end
+        return state[slot]
     end
     local ledger={records={},seen={},inputs=0,keys=0,attempted=false,arrays={}}
     local function array_size(array,label,limit)
@@ -349,7 +351,8 @@ local function capture_player_input_seals()
         if is_key then ledger.keys=ledger.keys+1 else ledger.inputs=ledger.inputs+1 end
     end
     local ok,err=pcall(function()
-        for _,name in ipairs({"_PlayerInput","_PadPlayerInput","_MkbPlayerInput"}) do
+        local arrays=ui and {'_UIInput','_PadUIInput','_MkbUIInput'} or {'_PlayerInput','_PadPlayerInput','_MkbPlayerInput'}
+        for _,name in ipairs(arrays) do
             local array=required(function() return state.input:get_field(name) end,"Read player input array "..name)
             local count=array_size(array,name,16)
             ledger.arrays[name]=count
@@ -366,22 +369,24 @@ local function capture_player_input_seals()
         end
         if ledger.inputs==0 or ledger.keys==0 then error("No reflected player input/key owners",0) end
     end)
-    state.input_seal_diagnostic={captured=ok,inputs=ledger.inputs,keys=ledger.keys,arrays=ledger.arrays,
+    state[diagnostic]={captured=ok,inputs=ledger.inputs,keys=ledger.keys,arrays=ledger.arrays,
         error=not ok and tostring(err) or nil,sealed=false}
     if not ok then error("Input seal capture failed before sealing: "..tostring(err),0) end
-    state.input_seals=ledger
+    state[slot]=ledger
     return ledger
 end
-local function seal_player_inputs()
-    local ledger=capture_player_input_seals()
-    if not method(state.input,"sealAllPlayer") then error("Missing GameInputManager.sealAllPlayer",0) end
+local function seal_player_inputs(ui)
+    local ledger=capture_player_input_seals(ui)
+    local operation=ui and 'sealAllUI' or 'sealAllPlayer'
+    if not method(state.input,operation) then error("Missing GameInputManager."..operation,0) end
     -- Record the attempted call before invoking it, so a partial failure can be restored.
     ledger.attempted=true
-    strictcall(state.input,"sealAllPlayer")
-    state.input_seal_diagnostic.sealed=true
+    strictcall(state.input,operation)
+    state[ui and 'ui_input_seal_diagnostic' or 'input_seal_diagnostic'].sealed=true
 end
-local function restore_player_input_seals()
-    local ledger=state.input_seals
+local function restore_player_input_seals(ui)
+    local slot=ui and 'ui_input_seals' or 'input_seals'
+    local ledger=state[slot]
     if not ledger then return end
     local restored,errors,remaining=0,{},{}
     if ledger.attempted then
@@ -403,9 +408,19 @@ local function restore_player_input_seals()
         end
     end
     ledger.records=remaining;ledger.restore_pending=#remaining>0
-    if #remaining==0 then state.input_seals=nil end
-    state.input_seal_diagnostic={captured=true,inputs=ledger.inputs,keys=ledger.keys,arrays=ledger.arrays,
+    if #remaining==0 then state[slot]=nil end
+    state[ui and 'ui_input_seal_diagnostic' or 'input_seal_diagnostic']={captured=true,inputs=ledger.inputs,keys=ledger.keys,arrays=ledger.arrays,
         sealed=false,restore_writes=restored,pending_records=#remaining,errors=errors}
+end
+local function sync_mc_gui_input_seals()
+    local bridge=_G.onimusha_mc
+    local block=false
+    if state.active and state.input and bridge then
+        local native=bridge.status()
+        local mc=native.enabled and native.connected and bridge.read_mc()
+        block=mc and mc.screen_open==true and mc.in_world==true and not mc.dead and not native.re_ui_open
+    end
+    if block then seal_player_inputs(true) else restore_player_input_seals(true) end
 end
 local function positive_fov(value)
     return type(value)=="number" and value==value and value>0 and value<math.huge
@@ -764,6 +779,7 @@ local function restore_camera_dither()
 end
 local function restoration_pending()
     return (state.input_seals and state.input_seals.restore_pending) or state.hidden or state.fov_restore~=nil
+        or (state.ui_input_seals and state.ui_input_seals.restore_pending)
         or state.active_camera_restore~=nil or state.primary_camera_rollback~=nil or state.dither_restore~=nil
 end
 local function fail_open(reason)
@@ -783,6 +799,7 @@ local function fail_open(reason)
     state.not_ready_reason=reason
     state.active=false; state.status=reason
     restore_player_input_seals()
+    restore_player_input_seals(true)
     set_boxes_enabled(false)
     restore_player_visuals()
     restore_camera_dither()
@@ -2064,6 +2081,24 @@ local function install_hooks()
     if cfg.runtime_stage=="C" then install_camera_observation_hooks() end
     if state.control_hooks_attempted then return end
     state.control_hooks_attempted=true
+    -- Native menus poll GameInputManager separately from the player input and
+    -- Windows messages. Seal UI only while a MC screen owns typing/clicks, after
+    -- the manager refreshes this frame's raw keys, before native menu consumers.
+    local input_update=td('app.GameInputManager'):get_method('update')
+    assert(input_update and input_update:get_num_params()==0,'Missing GameInputManager.update()')
+    state.hooks.gui_input={calls=0,method='GameInputManager.update/post sealAllUI'}
+    sdk.hook(input_update,function(args)
+        thread.get_hook_storage().onimusha_mc_gui_input_owner=same(sdk.to_managed_object(args[2]),state.input)
+    end,function(retval)
+        local storage=thread.get_hook_storage()
+        local owned=storage.onimusha_mc_gui_input_owner;storage.onimusha_mc_gui_input_owner=nil
+        if owned then
+            state.hooks.gui_input.calls=state.hooks.gui_input.calls+1
+            local ok,err=pcall(sync_mc_gui_input_seals)
+            if not ok then state.hooks.gui_input.error=tostring(err);fail_open('MC GUI input seal failed: '..tostring(err)) end
+        end
+        return retval
+    end)
     -- Camera-distance dither only. Death/stealth/material transparency keep their own logic.
     local dither=td('app.mcCamSys_DitherDepth')
     local dither_method=dither and dither:get_method('onLateUpdateEnd')
@@ -2444,6 +2479,7 @@ local function tick()
     state.active=true;state.not_ready_reason=nil;state.status="Minecraft controls player; native HP authoritative"
     set_boxes_enabled(true)
     seal_player_inputs()
+    sync_mc_gui_input_seals()
     local np=repos(mc.x,mc.y,mc.z)
     local delta=math.sqrt((np.x-p.x)^2+(np.y-p.y)^2+(np.z-p.z)^2)
     if delta>cfg.max_pose_jump*cfg.units_per_block and mc.teleport_ack~=state.teleport_seq then
@@ -2487,7 +2523,7 @@ re.on_pre_application_entry("UpdateBehavior",function()
     state.camera_observation_frame=state.frame+1
     observe_camera_projection("before_update_behavior",state.camera_observation_frame)
     if state.active and state.input then
-        local ok,err=pcall(seal_player_inputs)
+        local ok,err=pcall(function() seal_player_inputs();sync_mc_gui_input_seals() end)
         if not ok then fail_open("Input seal error: "..tostring(err)) end
     end
 end)
@@ -2532,6 +2568,7 @@ re.on_application_entry("LateUpdateBehavior",function()
             primary_camera_rollback=state.primary_camera_rollback_diagnostic,
             host_camera=state.host_camera_diagnostic,
             input_seals=state.input_seal_diagnostic,
+            ui_input_seals=state.ui_input_seal_diagnostic,
             visual_restore=state.visual_restore_diagnostic,
             hooks=state.hooks,health_hook_test=state.health_hook_test,
             combat=state.combat,health_revision=state.health_revision,health_remainder=state.health_remainder,

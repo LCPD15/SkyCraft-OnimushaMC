@@ -30,11 +30,14 @@ local function stage_key() return 'stage:20:area:78' end
 local function choose_world(key) assert(key==state.world_key);return true end
 local function refresh_camera_baseline() return true end
 local function apply_events() end
+local function process_death_handoff() end -- independently tested by death_handoff_regression.py
 local function probe_block_colliders() end
 local function publish_actors() end
 local function persist_session() persist_calls=persist_calls+1 end
 local function apply_solids() end
 local function restore_player_input_seals() end
+local function restore_camera_dither() end
+local function sync_mc_gui_input_seals() end -- independently tested by input_seal_regression.py
 local function restore_player_visuals() end
 local function set_boxes_enabled() end
 local function capture_player_visuals() captures=captures+1;state.draw_targets={{obj=state.player_go,original=true}} end

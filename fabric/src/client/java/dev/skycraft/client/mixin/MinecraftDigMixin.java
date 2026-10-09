@@ -12,6 +12,16 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 /** Attacking Skyrim's geometry digs into it (SkyDigClient). */
 @Mixin(Minecraft.class)
 public abstract class MinecraftDigMixin {
+	@org.spongepowered.asm.mixin.Unique private int onimusha$useLogs;
+	@Inject(method = "startUseItem", at = @At("HEAD"))
+	private void onimusha$useDiagnostic(CallbackInfo ci) {
+		Minecraft mc = (Minecraft)(Object)this;
+		if (dev.skycraft.client.SkyClient.linked() && mc.player != null && onimusha$useLogs++ < 24) {
+			dev.skycraft.SkyCraft.LOG.info("OnimushaMC: use item={} hp={} using={} grabbed={} hit={}",
+				mc.player.getMainHandItem(), mc.player.getHealth(), mc.player.isUsingItem(),
+				mc.mouseHandler.isMouseGrabbed(), mc.hitResult);
+		}
+	}
 	@Inject(method = "startAttack", at = @At("HEAD"), cancellable = true)
 	private void skycraft$digStart(CallbackInfoReturnable<Boolean> cir) {
 		Minecraft minecraft = (Minecraft) (Object) this;

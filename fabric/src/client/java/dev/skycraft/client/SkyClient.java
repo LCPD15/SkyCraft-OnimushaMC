@@ -453,6 +453,7 @@ public final class SkyClient {
 				}
 			}
 			FrameExporter.capture(minecraft);
+			LocalWindowPreview.present(minecraft);
 		}
 	}
 

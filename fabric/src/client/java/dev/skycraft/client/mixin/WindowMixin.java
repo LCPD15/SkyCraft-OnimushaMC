@@ -7,7 +7,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-/** The MC window is hidden while linked; Skyrim has the real focus, so pretend we do too. */
+/** Hidden or visible, the MC bridge uses host focus and must keep processing its replayed input. */
 @Mixin(Window.class)
 public abstract class WindowMixin {
 	@Inject(method = "isFocused", at = @At("HEAD"), cancellable = true)

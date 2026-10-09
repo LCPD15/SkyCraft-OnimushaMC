@@ -374,7 +374,7 @@ local function inspect(c)
         local ok,value=pcall(function()
             local o=roots[q.root]
             if q.root=='singleton' then
-                assert(q.type=='app.CameraManager','Only the verified camera singleton is inspectable')
+                assert(q.type=='app.CameraManager' or q.type=='app.GameInputManager','Only verified camera/input singletons are inspectable')
                 o=sdk.get_managed_singleton(q.type)
             end
             if q.root=='enemy' then

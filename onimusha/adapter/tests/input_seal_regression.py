@@ -2,7 +2,7 @@
 from pathlib import Path
 from lupa.lua54 import LuaRuntime
 source=(Path(__file__).resolve().parents[1]/"onimusha_mc.lua").read_text(encoding="utf-8-sig")
-fragment=source[source.index("local function capture_player_input_seals()"):source.index("local function fail_open(reason)")]
+fragment=source[source.index("local function capture_player_input_seals("):source.index("local function fail_open(reason)")]
 lua=LuaRuntime(unpack_returned_tuples=True)
 run=lua.execute(r"""
 local state
@@ -11,7 +11,7 @@ local function required(fn,label) local ok,result=pcall(fn);if not ok then error
 local function fields(obj) return obj.metadata end
 local function typename(obj) return obj.name end
 local function addr(obj) return obj.identity end
-local function method(obj,name) return name=='sealAllPlayer' and obj.sealAllPlayer or nil end
+local function method(obj,name) return obj[name] end
 local function strictcall(obj,name) obj[name](obj) end
 local function object(identity,name,field_name,original)
  local obj={identity=identity,name=name,value=original}
@@ -52,8 +52,19 @@ local function setup()
   for _,obj in ipairs(inputs) do obj.value=true end
   for _,obj in ipairs(keys) do obj.value=true end
  end
+ local ui_inputs,ui_keys={},{}
+ for i,name in ipairs({'_UIInput','_PadUIInput','_MkbUIInput'}) do
+  local input=object('ui'..i,'app.UIInput','_SealAll',i==3)
+  local keys={object('uikey'..i,'ace.cKeyBase','_IsSealed',false)}
+  input._Keys=managed_array('ace.cKeyBase[]',keys)
+  manager[name]=managed_array('app.UIInput[]',{input});ui_inputs[#ui_inputs+1]=input;ui_keys[#ui_keys+1]=keys[1]
+ end
+ manager.sealAllUI=function()
+  for _,obj in ipairs(ui_inputs) do obj.value=true end
+  for _,obj in ipairs(ui_keys) do obj.value=true end
+ end
  state={input=manager}
- return inputs,keys
+ return inputs,keys,ui_inputs,ui_keys
 end
 """+fragment+r"""
 return function()
@@ -113,6 +124,25 @@ return function()
  assert(not state.input_seals and inputs[1].value==false and state.input_seal_diagnostic.pending_records==0)
  assert(state.input_seal_diagnostic.restore_writes==1)
  print('PASS failed input restore retains only failed owner and retry succeeds')
+ local ui,uk;inputs,keys,ui,uk=setup();state.active=true
+ local native={enabled=true,connected=true};local mc={screen_open=true,in_world=true,dead=false}
+ onimusha_mc={status=function()return native end,read_mc=function()return mc end}
+ seal_player_inputs();sync_mc_gui_input_seals()
+ assert(state.ui_input_seals and state.ui_input_seal_diagnostic.keys==3)
+ for _,obj in ipairs(ui)do assert(obj.value)end
+ mc.screen_open=false;sync_mc_gui_input_seals()
+ assert(not state.ui_input_seals and state.input_seals and inputs[1].value)
+ assert(not ui[1].value and not ui[2].value and ui[3].value)
+ for _,key in ipairs(uk)do assert(not key.value)end
+ print('PASS opening GUI seals native UI; closing restores UI without unsealing player control')
+ for _,reason in ipairs({'enabled','connected','re_ui_open','inactive','dead'})do
+  state.active=true;native.enabled=true;native.connected=true;native.re_ui_open=false;mc.dead=false;mc.screen_open=true
+  sync_mc_gui_input_seals();assert(state.ui_input_seals)
+  if reason=='inactive' then state.active=false elseif reason=='dead' then mc.dead=true
+  elseif reason=='re_ui_open' then native.re_ui_open=true else native[reason]=false end
+  sync_mc_gui_input_seals();assert(not state.ui_input_seals and not ui[1].value)
+ end
+ print('PASS F10 off, lost link, REFramework UI, inactive takeover and death all release native UI')
 end
 """)
 run()

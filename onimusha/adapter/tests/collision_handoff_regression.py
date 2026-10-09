@@ -21,7 +21,8 @@ local function attempt(fn) local ok,v=pcall(fn);if ok then return v end end
 local function call(obj,name,...) if not obj then return nil end;return obj:call(name,...) end
 local function strictcall(obj,name,...) assert(obj);return obj:call(name,...) end
 local function triangle_vertices(t) return t end
-local function restore_player_input_seals() writes=writes+1 end
+local function restore_player_input_seals(ui) if not ui then writes=writes+1 end end
+local function restore_camera_dither() end
 local function set_boxes_enabled(enabled) assert(enabled==false);writes=writes+1 end
 local function restore_player_visuals() writes=writes+1 end
 local function close(a,b) assert(math.abs(a-b)<1e-8,tostring(a)..' != '..tostring(b)) end

@@ -1,5 +1,15 @@
 # Isolated Minecraft runtime
 
+## Current local shortcut / 当前电脑的一键入口
+
+After Onimusha enters a playable scene, run `G:\Onimusha_MC_mod\Start-OnimushaMC.cmd`
+or `G:\游戏MOD\0_自己做的Mod\鬼武者\MC\启动并连接MC.cmd`.
+`Connect-OnimushaMC.ps1` opens the existing `OnimushaMC-XYZ-v2` developer test world with
+`-ShowWindow -QuitWithHost -SwordBlocking`, starts/reuses the native model worker, and reuses
+the verified MC process rather than launching duplicates. Switch back to Onimusha and use F10.
+This uses the local development identity; it does not authenticate a Microsoft account.
+See [the play guide](../../docs/ONIMUSHA-PLAY-GUIDE.md) for controls, paths and mod compatibility.
+
 The runtime lives outside the Git repository at `G:\Onimusha_MC_mod\runtime\minecraft`.
 Minecraft game files and account credentials are not distributed in source releases.
 
