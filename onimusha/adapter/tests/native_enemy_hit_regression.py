@@ -191,14 +191,23 @@ e.pe.call=function(self,n,...) if n=='get_AttackParamSupporter' then return supp
  return original(self,n,...)
 end
 local profiles={}
-for i=1,12 do tr={};assert(module.queue(t,b,700,tr) and tr.outcome=='queued_native');profiles[tr.native_profile_id]=true end
-assert(e.queues==12 and profiles[1] and profiles[41] and #s.templates==0)
-passed('empty post-reset template list resolves both owned asset IDs and allows repeated generic native hits')
+-- Incoming amounts are already the MC hit result (weapon/enchants/critical/
+-- cooldown) times the host unit scale. Both native reaction templates must
+-- preserve that amount, without using their own 100/300 attack strength.
+local requests={100,700,900,1050,1100,341.6,162.4,50.17601,100,700,900,1050}
+for _,amount in ipairs(requests) do
+ tr={};assert(module.queue(t,b,amount,tr) and tr.outcome=='queued_native')
+ profiles[tr.native_profile_id]=true
+ assert(e.queued_runtime:call('get_Attack')==0)
+ assert(e.queued_runtime:call('get_FixedAttack')==amount and tr.requested_damage==amount)
+end
+assert(e.queues==#requests and profiles[1] and profiles[41] and #s.templates==0)
+passed('both native reaction profiles preserve varied final MC damage including fractional cooldown hits')
 local a=assets[1]:get_field('_AttackParam');local read=a.get_field
 a.get_field=function(self,n) if n=='_Attack' then return 999 end;return read(self,n) end
-tr={};assert(module.queue(t,b,700,tr) and tr.outcome=='rejected' and e.queues==12 and e.hp==2000)
+tr={};assert(module.queue(t,b,700,tr) and tr.outcome=='rejected' and e.queues==#requests and e.hp==2000)
 assert(s.mode=='enabled')
-a.get_field=read;tr={};assert(module.queue(t,b,700,tr) and tr.outcome=='queued_native' and e.queues==13)
+a.get_field=read;tr={};assert(module.queue(t,b,700,tr) and tr.outcome=='queued_native' and e.queues==#requests+1)
 passed('changed fingerprint rejects without HP fallback; valid asset recovery does not need an enemy-specific rule')
 
 e,s,b,t=prepare()
