@@ -5,16 +5,20 @@
 
 ## 最新结果与下一步
 
-### 2026-10-10 死亡／重生及近距离渐隐修正待最终实测
+### 2026-10-10 原生死亡已通过；本地角色移除及渐隐后续修正待实测
 
 原生卡死现场已恢复：HP归零但停留在MediumDamage，需要对当前加载的死亡动作发起标准requestBaseAction，
-用户已确认原生死亡界面及重试成功。正式Lua现按确认致死→解除接管并恢复→动态查找死亡动作→一次请求处理。
+用户已确认正式Lua自动死亡／原生重试成功。正式Lua按确认致死→解除接管并恢复→动态查找死亡动作→一次请求处理。
 MC的Gui.setScreen(null)会绕过旧DeathScreen参数拦截，已补内部条件拦截、遗留界面清理及原生回血后的dead标志恢复。
 恢复不依赖F10／地形就绪／SKY_IN_GAME，保留MC角色、背包和经验。新JAR已安装，DLL未改。
 真实MC客户端维护自测已通过界面拦截、旧界面清理、dead/deathTime恢复，HP与玩家对象不变；
-当前MC进程103108，日志live-death-retry-final-20261010.stdout.log；loader generation10。
-渐隐改为实际onLateUpdateEnd消费者中的一次性requestDisable；旧isDitherEnableCamera hook从未被调用。
-近距离视觉及最终自动致死→原生重试→F10重新接管仍待用户实测，不要提前记为通过。
+但用户发现重试后只能转视角：LocalPlayer独立覆盖tickDeath，第20tick仍会移除客户端角色，父类拦截无效。
+已补本地override拦截，真实MC连续30次死亡tick后实体仍保留、恢复后isAlive=true检查通过。
+当前MC进程50720，日志live-local-death-20261010.stdout.log；loader generation12。
+渐隐requestDisable虽记录3783次调用仍无效，现改为原生onLateUpdateEnd前setEnable(false)、后恢复准确原值，
+记录计算期间Enable和Near/FarAlpha，失败保留恢复记录。旧isDitherEnableCamera hook从未被调用。
+最新问题已发用户：解除原生暂停，F10确认WASD／跳跃和近距离渐隐，回安全位置保持开启。
+近距离视觉及最新完整致死→重试→重新移动仍待用户实测，不要提前记为通过。
 详细原因、验证及测试夹具故障记录见 [死亡与渐隐](ONIMUSHA-DEATH-AND-DITHER.md)。
 
 ### 2026-10-09 REFramework 五档伤害倍率已安装并验收

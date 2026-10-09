@@ -33,7 +33,8 @@ public final class MinecraftDeathSyncCheck {
                 Class<?> sky = loader.loadClass("dev.skycraft.client.SkyClient");
                 require((boolean) sky.getMethod("nativeOwnsDeath").invoke(null), "Native authority unavailable");
                 Object hostState = sky.getMethod("sky").invoke(null);
-                require(!(boolean) hostState.getClass().getMethod("mcLook").invoke(hostState), "Turn takeover OFF before maintenance");
+                // MC_LOOK is a camera mode, not the F10 enable switch. A native pause is observable here.
+                require((boolean) hostState.getClass().getMethod("menuOpen").invoke(hostState), "Pause the native game before maintenance");
                 Object player = minecraft.getField("player").get(mc);
                 Object gui = minecraft.getField("gui").get(mc);
                 Class<?> living = loader.loadClass("net.minecraft.world.entity.LivingEntity");
@@ -54,6 +55,9 @@ public final class MinecraftDeathSyncCheck {
                 require(hp > 0 && !wasDead, "Wait for healthy native HP mirror before check");
                 try {
                     setHealth.invoke(player, 0f); dead.setBoolean(player, true); deathTime.setInt(player, 17);
+                    var tickDeath = local.getDeclaredMethod("tickDeath"); tickDeath.setAccessible(true);
+                    for (int tick = 0; tick < 30; tick++) tickDeath.invoke(player);
+                    require(!(boolean) living.getMethod("isRemoved").invoke(player), "LocalPlayer override removed the mirrored player");
                     setScreen.invoke(gui, new Object[]{null});
                     require(!deathScreen.isInstance(currentScreen.get(gui)), "Implicit DeathScreen escaped redirect");
                     Object stale = deathScreen.getConstructor(component, boolean.class, local).newInstance(null, false, player);
@@ -69,11 +73,12 @@ public final class MinecraftDeathSyncCheck {
                     var sync = sky.getDeclaredMethod("synchronizeNativeLife", minecraft); sync.setAccessible(true);
                     sync.invoke(null, mc);
                     require(!(boolean) living.getMethod("isDeadOrDying").invoke(player), "Native revival did not clear dead flag");
+                    require((boolean) living.getMethod("isAlive").invoke(player), "Revived client is not alive/ticking");
                     require(deathTime.getInt(player) == 0, "Death animation timer survived retry");
                     require(!deathScreen.isInstance(currentScreen.get(gui)), "Stale DeathScreen survived retry");
                     require((float) getHealth.invoke(player) == hp, "Recovery changed HP");
                     require(minecraft.getField("player").get(mc) == player, "Recovery replaced player/inventory owner");
-                    result = "PASS implicit screen; explicit screen; old screen cleanup; dead flag and timer reset; HP and player identity unchanged";
+                    result = "PASS 30 local death ticks retain live entity; implicit screen; explicit screen; old screen cleanup; dead flag and timer reset; HP and player identity unchanged";
                 } finally {
                     setHealth.invoke(player, hp); dead.setBoolean(player, wasDead); deathTime.setInt(player, time);
                     setScreen.invoke(gui, oldScreen);

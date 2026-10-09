@@ -749,9 +749,22 @@ local function restore_player_visuals()
     state.visual_restore_diagnostic={pending_draw=#remaining,pending_fov=state.fov_restore~=nil,
         draw_writes=draw_writes,restored_draw=restored_draw,fov_writes=fov_writes,errors=errors,fov_error=fov_error}
 end
+local function restore_camera_dither()
+    local record=state.dither_restore
+    if not record then return end
+    local ok,err=pcall(function()
+        if record.obj:get_field('_IsDestroy')==true then return end
+        strictcall(record.obj,'setEnable(System.Boolean, System.Single, via.curve.EaseType)',record.original,0.0,0)
+        assert(strictcall(record.obj,'get_IsEnable')==record.original,'Camera dither restore readback failed')
+    end)
+    local diagnostic=state.hooks and state.hooks.camera_dither
+    if ok then state.dither_restore=nil
+    elseif diagnostic then diagnostic.restore_error=tostring(err) end
+    if diagnostic then diagnostic.pending_restore=state.dither_restore~=nil end
+end
 local function restoration_pending()
     return (state.input_seals and state.input_seals.restore_pending) or state.hidden or state.fov_restore~=nil
-        or state.active_camera_restore~=nil or state.primary_camera_rollback~=nil
+        or state.active_camera_restore~=nil or state.primary_camera_rollback~=nil or state.dither_restore~=nil
 end
 local function fail_open(reason)
     state.cached_camera_pose=nil
@@ -772,6 +785,7 @@ local function fail_open(reason)
     restore_player_input_seals()
     set_boxes_enabled(false)
     restore_player_visuals()
+    restore_camera_dither()
     if state.active_camera_restore then restore_owned_active_camera() end
     if state.primary_camera_rollback then restore_primary_camera_rollback() end
 end
@@ -2054,23 +2068,40 @@ local function install_hooks()
     local dither=td('app.mcCamSys_DitherDepth')
     local dither_method=dither and dither:get_method('onLateUpdateEnd')
     if dither_method then
-        -- isDitherEnableCamera exists but is inlined on TDB82 (zero observed calls).
-        -- The real late-update consumes requestDisable once per frame, then restores
-        -- its own enable state on the next frame without a request. Do not skip it.
+        -- TDB82 requestDisable feeds its request Boolean directly into setEnable;
+        -- observed requests did not disable dither. Scope the verified enable setter
+        -- around its real consumer instead, then restore before leaving the hook.
         state.hooks.camera_dither={attempted=true,calls=0,suppressed=0,
-            method='onLateUpdateEnd/requestDisable',address=tostring(dither_method:get_function())}
+            method='onLateUpdateEnd/scoped setEnable',address=tostring(dither_method:get_function())}
         sdk.hook(dither_method,function(args)
             local r=state.hooks.camera_dither;r.calls=r.calls+1
             if not state.active then return end
             local ok,err=pcall(function()
                 local obj=assert(sdk.to_managed_object(args[2]))
                 assert(typename(obj)=='app.mcCamSys_DitherDepth','Unexpected camera dither owner')
-                -- TDB82 EaseType.Linear=0. Zero blend time prevents a fade transition.
-                strictcall(obj,'requestDisable(System.Single, via.curve.EaseType)',0.0,0)
+                assert(not state.dither_restore,'Previous camera dither restore still pending')
+                local original=strictcall(obj,'get_IsEnable')
+                assert(type(original)=='boolean','Invalid camera dither baseline')
+                state.dither_restore={obj=obj,original=original}
+                strictcall(obj,'setEnable(System.Boolean, System.Single, via.curve.EaseType)',false,0.0,0)
+                assert(strictcall(obj,'get_IsEnable')==false,'Camera dither disable readback failed')
                 r.suppressed=r.suppressed+1;r.last_request_frame=state.frame
             end)
             if not ok then r.error=tostring(err) end
         end,function(retval)
+            local record=state.dither_restore
+            if record then
+                local r=state.hooks.camera_dither
+                local ok,err=pcall(function()
+                    r.enabled_during_consumer=strictcall(record.obj,'get_IsEnable')
+                    local param=record.obj:get_field('_CurrentParam')
+                    r.near_alpha=param and param:get_field('NearAlpha')
+                    r.far_alpha=param and param:get_field('FarAlpha')
+                end)
+                if not ok then r.error=tostring(err) end
+                restore_camera_dither()
+                if state.dither_restore then fail_open('Camera dither restore pending') end
+            end
             return retval
         end)
     end

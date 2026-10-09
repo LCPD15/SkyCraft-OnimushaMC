@@ -373,6 +373,10 @@ local function inspect(c)
         if i>40 then break end
         local ok,value=pcall(function()
             local o=roots[q.root]
+            if q.root=='singleton' then
+                assert(q.type=='app.CameraManager','Only the verified camera singleton is inspectable')
+                o=sdk.get_managed_singleton(q.type)
+            end
             if q.root=='enemy' then
                 local index=tonumber(q.enemy_index) or 1
                 assert(index>=1 and index<=#enemies and index==math.floor(index),'Invalid enemy index')
