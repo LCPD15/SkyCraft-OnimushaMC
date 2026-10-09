@@ -24,8 +24,9 @@ print('PASS body-list offset shift reuses all twenty live objects without conver
 for _,p in ipairs(dynamic.avatar)do p.kind=p.kind==101 and 102 or 101 end
 advance(1);assert(#dynamic_rows.avatar==20 and created==created_before and destroyed==destroyed_before)
 assert(onimusha_native_sections.status().dynamic_reused==40)
-table.remove(dynamic.avatar);advance(15);assert(#dynamic_rows.avatar==19 and destroyed==destroyed_before+1)
-print('PASS cyclic remapping never destroys a reassigned object; only genuinely removed faces retire')
+table.remove(dynamic.avatar);advance(15);assert(#dynamic_rows.avatar==19 and destroyed==destroyed_before)
+assert(onimusha_native_sections.status().dynamic_pool_cached==1)
+print('PASS cyclic remapping preserves reassigned objects; removed faces are hidden and cached')
 
 -- New DLL stable identities span flat-list reorders and in-place hurt tint.
 dynamic.stable_faces=true

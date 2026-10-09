@@ -32,6 +32,8 @@ print('PASS disabling only dynamic rendering restores all entity streams without
 control.enabled=true;control.max_instances=6;advance(70)
 assert(onimusha_native_sections.status().dynamic_objects==6 and #dynamic_rows.hands==1)
 onimusha_native_sections.stop();advance(15,false)
-assert(not onimusha_native_sections.busy() and onimusha_native_sections.status().owned_total==0)
-print('PASS live instance cap, first-person priority and F10 deferred teardown')
+assert(not onimusha_native_sections.busy() and onimusha_native_sections.status().dynamic_pool_cached==6)
+for _,b in ipairs(objects)do assert(not b.draw and not b.enabled)end
+callbacks.reset();advance(15,false)
+print('PASS live instance cap, first-person priority and F10 hidden cache / full reset teardown')
 ''')

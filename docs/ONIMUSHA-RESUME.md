@@ -5,6 +5,28 @@
 
 ## 最新结果与下一步
 
+### 2026-10-10 动态实例缓存修正；NPC 承伤检查停点
+
+用户已确认可见窗口、放拆与聊天正常；此前放置失败确认为误用了 Adventure，已恢复 Survival。
+本轮动态缓存修正已安装：F10 关闭／动态实体移除后隐藏并缓存已加载 Mesh，按流和外观复用；
+场景／epoch／MC进程／连接代际改变及脚本重载仍完整清理。首次新外观仍有限速加载。
+现场56个手部／道具部件恢复后 pool_hits=56，created仍56、removed仍0，资源错误为空；
+身体／NPC模拟50面一帧恢复，移除再生成和跨场景失效通过。共11套Lua回归脚本通过。
+真实铁傀儡再生成视觉尚未由用户复测，不要泛化现场验证范围。
+
+NPC承伤缺失已确认：原生玩家健康钩子只向MC玩家发IN_HURT，MC生物既没有原生受击对象也没有入站通道。
+已读取HitController/HitInfo/ColliderSwitcher的通用攻击接口，新增限时只读探针于combat_inventory。
+当前安全场景无敌人，探针安装／到期正常但未采集真实敌人攻击，NPC承伤尚未实现，不能写成已修好。
+探针默认关闭；后续需一次普通原生攻击记录来验证活动体积、攻击实例和结算参数，不要逐敌人逐招映射。
+见 [缓存与NPC承伤检查](ONIMUSHA-DYNAMIC-CACHE-AND-NPC-HITS.md)。证据 logs/dynamic-pool-npc-20261010/。
+最新自动重载generation18；payload已保存最终小修正，下次启动自然加载。不需要用户Reset Scripts。
+按用户要求，04:33通过MC主线程正常stop，日志确认Saving players／Saving worlds／Saving chunks，MC进程已退出；
+随后Onimusha CloseMainWindow成功，转换器随宿主退出，三个PID均已消失。没有强杀Java。
+原世界89个文件（109810914字节）已复制并逐项SHA256核对：
+`runtime/test-backups/after-dynamic-cache-20261010-043643`，未修改库存／生命／经验数据。
+接管配置为false，NPC和inventory探针已停用；本次5项部署记录已更新，源码与安装Lua一致。
+收据见上述日志目录的world-backup.json、completion.json与closed-processes.json。
+
 ### 2026-10-10 可见 MC 窗口黑屏／放置输入修正版，等待原场景验收
 
 用户确认同一场景离屏模式可以放置，因此按可见窗口引入的回归排查，未调整场景或建筑高度。

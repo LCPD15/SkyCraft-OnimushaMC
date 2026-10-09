@@ -1059,3 +1059,106 @@ end)
 re.on_script_reset(function() pcall(cleanup,'reset_removed');pcall(report) end)
 end
 -- END NATIVE OBJECT PROBE
+
+-- NPC incoming-hit research, Onimusha TDB82. Observation only: no damage,
+-- collider creation, attack replay, player-hit fan-out, or retained hit pointers.
+-- A bounded capture is armed explicitly; expiry/disable stops both observers.
+do
+    local control='onimusha_npc_hit_probe_control.json'
+    local output='onimusha_npc_hit_probe_status.json'
+    local q={frame=0,armed=false,events={},errors={},counts={}}
+    local function event(kind,data)
+        q.counts[kind]=(q.counts[kind] or 0)+1
+        if #q.events<q.limit then q.events[#q.events+1]={frame=q.frame,kind=kind,data=data}
+        else q.truncated=true end
+    end
+    local function owner(go)
+        if not go or not call(go,'get_Valid') then return end
+        return {address=go:get_address(),name=call(go,'get_Name'),
+            position=snapshot(call(go,'get_Transform'):get_position(),1,{})}
+    end
+    local function install()
+        local t=assert(sdk.find_type_definition('app.HitController'))
+        local m=assert(t:get_method('notifyHitProc(app.HitInfo)'))
+        assert(not m:is_static() and m:get_num_params()==1
+            and m:get_param_types()[1]:get_full_name()=='app.HitInfo'
+            and m:get_return_type():get_full_name()=='System.Void','Unexpected hit signature')
+        assert(sdk.to_int64(m:get_function())>0,'Missing hit method')
+        sdk.hook(m,function(args)
+            if not q.armed or #q.events>=q.limit then return end
+            local ok,err=pcall(function()
+                local h=sdk.to_managed_object(args[3])
+                assert(h and typ(h)=='app.HitInfo','Unexpected hit argument')
+                local attacker=h:get_field('<AttackCharacter>k__BackingField')
+                if not attacker or not attacker:get_type_definition():is_a('app.EnemyCharacter') then return end
+                local r={attacker_type=typ(attacker),attacker=owner(h:get_field('<AttackOwner>k__BackingField')),
+                    target=owner(h:get_field('<DamageOwner>k__BackingField'))}
+                for _,name in ipairs({'HitID','AttackUniqueID','AttackIndex','Position','Normal','AttackParamData','AttackData','AttackRuntimeData'}) do
+                    r[name]=snapshot(h:get_field('<'..name..'>k__BackingField'),2,{})
+                end
+                local col=h:get_field('<AttackCollidable>k__BackingField')
+                if col then
+                    r.enabled=call(col,'get_Enabled')
+                    local shape=call(col,'get_TransformedShape')
+                    if shape then
+                        r.shape=typ(shape);r.bounds=snapshot(call(shape,'get_BoundingAabb'),2,{})
+                    end
+                end
+                -- The same native hit notifies attacker and defender. Keep one
+                -- sample per frame/hit/victim without suppressing either call.
+                local key=table.concat({q.frame,tostring(r.AttackUniqueID),tostring(r.HitID),r.target and r.target.address or 0},':')
+                if q.last_key~=key then q.last_key=key;event('native_enemy_hit',r) end
+            end)
+            if not ok then q.error=tostring(err);q.armed=false end
+        end,function(ret)return ret end)
+        q.installed=true
+    end
+    local function inventory()
+        local scene=sdk.call_native_func(sdk.get_native_singleton('via.SceneManager'),sdk.find_type_definition('via.SceneManager'),'get_CurrentScene')
+        assert(scene,'No scene')
+        local enemies=call(scene,'findComponents(System.Type)',sdk.find_type_definition('app.EnemyCharacter'):get_runtime_type()):get_elements()
+        local out={enemy_count=#enemies,enemies={}}
+        for i,enemy in ipairs(enemies)do
+            if i>8 then out.truncated=true;break end
+            local go=call(enemy,'get_GameObject')
+            if go and call(go,'get_Valid') then
+                local entity=call(call(enemy,'get_CharacterEntityHolder'),'get_Entity')
+                local r={owner=owner(go),type=typ(enemy),entity_type=typ(entity)}
+                -- All enemy classes use the common entity/supporter contract.
+                -- Do not infer a hit or damage from distance/animation alone.
+                if entity then
+                    r.attack=snapshot(entity:get_field('_AttackInfo'),1,{})
+                    r.supporter=snapshot(entity:get_field('<AttackInfoSupporter>k__BackingField'),2,{})
+                    local parts=entity:get_field('<CharacterComponents>k__BackingField')
+                    local switch=parts and parts:get_field('<ColliderSwitcher>k__BackingField')
+                    r.switcher=snapshot(switch,1,{})
+                end
+                out.enemies[#out.enemies+1]=r
+            end
+        end
+        return out
+    end
+    re.on_application_entry('LateUpdateBehavior',function()
+        q.frame=q.frame+1
+        if q.frame%30==1 then
+            local c=(not fs or not fs.read or fs.read(control)~='') and json.load_file(control) or nil
+            if not c or c.enabled~=true then q.armed=false
+            elseif type(c.id)=='string' and #c.id<=120 and c.id~=q.id then
+                q.id=c.id;q.error=nil;q.events={};q.counts={};q.truncated=nil;q.last_key=nil;q.expired=nil
+                q.limit=math.max(1,math.min(128,math.floor(tonumber(c.max_events) or 64)))
+                q.expires=q.frame+math.max(30,math.min(3600,math.floor(tonumber(c.max_frames) or 1800)))
+                local ok,err=pcall(function()
+                    assert(sdk.get_tdb_version()==82,'Only TDB82')
+                    q.inventory=inventory();if not q.installed then install()end;q.armed=true
+                end)
+                if not ok then q.armed=false;q.error=tostring(err)end
+            end
+        end
+        if q.armed and q.frame>=q.expires then q.armed=false;q.expired=true end
+        if q.id and q.frame%60==0 then
+            -- Only types actually visited by this capture, not a memory dump.
+            json.dump_file(output,q)
+        end
+    end)
+    re.on_script_reset(function()q.armed=false end)
+end

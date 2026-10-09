@@ -5,6 +5,10 @@ local q={frame=0,instances={},holders={},warm_retired={},phase='disabled',create
 local pending={} -- host/model IDs never reused by the DLL during its lifetime
 local lights={}
 local dynamics={}
+-- Disabled Mesh instances keep their engine-owned dependencies. They may be reused
+-- only within the same scene/session, never across a native scene unload or reset.
+local dynamic_pool={}
+local pool_count=0
 -- Disabled by default; staged tests opt in through an explicit project control.
 -- Resource loading uses only the game-tested engine USER3 dependency owner.
 local DYNAMIC_NATIVE_ENABLED=false
@@ -28,6 +32,7 @@ local function owned_count()
     for _,r in pairs(q.holders)do if r.go then n=n+1 end end
     for _ in pairs(lights)do n=n+1 end
     for _ in pairs(dynamics)do n=n+1 end
+    n=n+pool_count
     return n
 end
 local function call(o,n,...) assert(o,n);return o:call(n,...) end
@@ -54,6 +59,43 @@ local function retire_warmer(r)
     q.warm_retired[#q.warm_retired+1]={go=r.go,mesh=r.warm_mesh,frame=q.frame,
         loader=r.loader,mesh_holder=r.mesh,material_holder=r.material,asset=r.asset_owner,white_asset=r.white_asset_owner}
     r.go=nil;r.warm_mesh=nil
+end
+local function evict_dynamic_pool()
+    local oldest_key,oldest_index,oldest
+    for k,rows in pairs(dynamic_pool)do for i,r in ipairs(rows)do
+        if not oldest or r.cached_at<oldest.cached_at then oldest_key=k;oldest_index=i;oldest=r end
+    end end
+    if not oldest then return false end
+    table.remove(dynamic_pool[oldest_key],oldest_index)
+    if #dynamic_pool[oldest_key]==0 then dynamic_pool[oldest_key]=nil end
+    pool_count=pool_count-1;retire_warmer(oldest);q.dynamic_removed=(q.dynamic_removed or 0)+1
+    q.dynamic_pool_evicted=(q.dynamic_pool_evicted or 0)+1;return true
+end
+local function purge_dynamic_pool()
+    while evict_dynamic_pool()do end
+end
+local function release_dynamic_object(k,r,keep)
+    if keep and dynamic_settings.enabled and not dynamic_settings.preload_only and r.loaded
+        and r.go and call(r.go,'get_Valid') and pool_count<dynamic_settings.max_instances then
+        call(r.warm_mesh,'set_Enabled',false);call(r.go,'set_DrawSelf',false)
+        local bucket=k:match('^([^:]+)')..':'..r.kind
+        r.cached_at=q.frame;dynamic_pool[bucket]=dynamic_pool[bucket] or {}
+        table.insert(dynamic_pool[bucket],r);pool_count=pool_count+1
+        q.dynamic_parked=(q.dynamic_parked or 0)+1
+    else
+        retire_warmer(r);q.dynamic_removed=(q.dynamic_removed or 0)+1
+    end
+end
+local function take_dynamic_object(stream,kind)
+    local bucket=stream..':'..kind;local rows=dynamic_pool[bucket]
+    while rows and #rows>0 do
+        local r=table.remove(rows);pool_count=pool_count-1
+        if #rows==0 then dynamic_pool[bucket]=nil end
+        if r.go and call(r.go,'get_Valid') then
+            r.start=q.frame;q.dynamic_pool_hits=(q.dynamic_pool_hits or 0)+1;return r
+        end
+        retire_warmer(r);q.dynamic_removed=(q.dynamic_removed or 0)+1
+    end
 end
 local function poll_resource(r)
     if r.phase~='userdata' and r.phase~='mesh' then return end
@@ -161,12 +203,13 @@ local function remove(k)
     end
     q.instances[k]=nil;q.removed=q.removed+1
 end
-local function clear(reason)
+local function clear(reason,keep_dynamic)
     local keys={};for k in pairs(q.instances)do keys[#keys+1]=k end
     for _,k in ipairs(keys)do remove(k)end
     for _,r in pairs(q.holders) do retire_warmer(r);if not r.ready and not r.error then r.phase='idle' end;r.folder=nil end
     for _,r in pairs(lights)do retire_warmer(r)end;lights={}
-    for _,r in pairs(dynamics)do retire_warmer(r);q.dynamic_removed=(q.dynamic_removed or 0)+1 end;dynamics={};q.dynamic_objects=0
+    for k,r in pairs(dynamics)do release_dynamic_object(k,r,keep_dynamic)end;dynamics={};q.dynamic_objects=0
+    if not keep_dynamic then purge_dynamic_pool();q.pool_context=nil end
     if q.context then q.context.bridge.release_section() end
     q.context=nil;q.phase=reason or 'disabled';q.ready=0;q.dynamic_streams={};q.dynamic_ready=0
 end
@@ -200,9 +243,9 @@ local function update_lights(s,c)
         end
     end
 end
-local function dynamic_remove(k)
+local function dynamic_remove(k,keep)
     local r=dynamics[k];if not r then return end
-    retire_warmer(r);dynamics[k]=nil;q.dynamic_removed=(q.dynamic_removed or 0)+1
+    release_dynamic_object(k,r,keep);dynamics[k]=nil
 end
 local function apply_tint(r,p)
     local tint=math.tointeger(p.tint or 0xffffffff)
@@ -228,7 +271,7 @@ local function update_dynamic(c)
     q.render_frame=s and s.render_frame
     if not s or not s.ready or s.epoch~=c.epoch then
         local keys={};for k in pairs(dynamics)do keys[#keys+1]=k end
-        for _,k in ipairs(keys)do dynamic_remove(k)end;return
+        for _,k in ipairs(keys)do dynamic_remove(k,true)end;return
     end
     local wanted={};local order={'hands','avatar','scene'}
     local function face_key(stream,p)return stream..':'..(s.stable_faces and p.id or p.first)end
@@ -260,7 +303,7 @@ local function update_dynamic(c)
             end
         end
     end
-    for _,pool in pairs(spare)do for _,old in ipairs(pool)do dynamic_remove(old.key)end end
+    for _,pool in pairs(spare)do for _,old in ipairs(pool)do dynamic_remove(old.key,true)end end
     dynamics=next_objects
     local made=0;local count=0;q.dynamic_streams={}
     q.dynamic_bind_errors=q.dynamic_bind_errors or {}
@@ -274,6 +317,13 @@ local function update_dynamic(c)
             if asset and asset.ready then available=available+1 end
             local failed=q.dynamic_bind_errors[p.kind]
             if failed then errors[tostring(p.kind)]=failed end
+            if not r and not failed and not dynamic_settings.preload_only and alive<dynamic_settings.max_instances then
+                r=take_dynamic_object(stream,p.kind)
+                if r then dynamics[k]=r;alive=alive+1 end
+            end
+            if not r and pool_count>0 and (alive+pool_count>=dynamic_settings.max_instances or owned_count()>=2560) then
+                evict_dynamic_pool()
+            end
             if not r and not failed and not dynamic_settings.preload_only and asset and asset.ready and not asset.empty
                 and made<dynamic_settings.per_frame and alive<dynamic_settings.max_instances and owned_count()<2560 then
                 -- Register ownership before binding so a caught failure retires
@@ -380,7 +430,11 @@ local function attach(owner,p,r)
     q.created=q.created+1
 end
 local function tick()
-    q.frame=q.frame+1;q.resource_allocated=0;q.result_polls=0;if q.frame%30==1 then dynamic_control()end;poll_resources();local c=q.context;if not c then return end
+    q.frame=q.frame+1;q.resource_allocated=0;q.result_polls=0
+    if q.frame%30==1 then dynamic_control()end
+    if not dynamic_settings.enabled or dynamic_settings.preload_only then purge_dynamic_pool() end
+    while pool_count>dynamic_settings.max_instances do evict_dynamic_pool()end
+    poll_resources();local c=q.context;if not c then return end
     if c.touch<q.frame-1 then clear('context_not_refreshed');return end
     local s=c.bridge.snapshot_native_instances()
     if not s or not s.ready or s.epoch~=c.epoch or s.world_id~=c.world_id or s.mc_pid~=c.mc_pid or s.generation~=c.generation then clear('waiting_snapshot');return end
@@ -460,10 +514,11 @@ function api.update(c)
     if sdk.get_tdb_version()~=82 or c.units~=1 or type(c.bridge.snapshot_native_instances)~='function' then clear('unsupported_runtime');return end
     local k=table.concat({c.scene,c.epoch,c.world_id,c.mc_pid,c.generation},':')
     if q.failed_key==k then return end
-    if not q.context or q.context.key~=k then clear('context_changed') end
+    if (q.context and q.context.key~=k) or (q.pool_context and q.pool_context~=k) then clear('context_changed') end
+    q.pool_context=k
     c.key=k;c.touch=q.frame;q.context=c
 end
-function api.stop()clear('disabled')end
+function api.stop()clear('disabled',true)end
 function api.busy()
     if next(q.instances) or next(lights) or next(dynamics) or #q.warm_retired>0 then return true end
     for _,r in pairs(q.holders) do if r.phase=='userdata' or r.go then return true end end
@@ -482,6 +537,7 @@ function api.status()
     end
     return{phase=q.phase,error=q.error,count=count,ready=q.ready or 0,desired=q.desired,created=q.created,removed=q.removed,
         render_frame=q.render_frame,pose_mismatch=q.pose_mismatch or 0,
+        dynamic_pool_cached=pool_count,dynamic_pool_hits=q.dynamic_pool_hits or 0,dynamic_pool_evicted=q.dynamic_pool_evicted or 0,
         receipts=q.receipts,waiting=q.waiting,resources_ready=resources_ready,resources_loading=resources_loading,lights=light_count,light_limit=64,
         resource_errors=resource_errors,resource_diagnostics=diagnostics,pause=q.pause,foreground=q.foreground,worker=q.worker,light_error=q.light_error,dynamic_enabled=dynamic_settings.enabled,dynamic_settings=dynamic_settings,dynamic_reused=q.dynamic_reused or 0,dynamic_created=q.dynamic_created or 0,dynamic_removed=q.dynamic_removed or 0,dynamic_objects=q.dynamic_objects or 0,dynamic_disabled_reason=not dynamic_settings.enabled and "staged_dynamic_control_disabled" or nil,dynamic_error=q.dynamic_error,dynamic_ready=q.dynamic_ready or 0,dynamic_streams=q.dynamic_streams,dynamic_scale_samples=q.dynamic_scale_samples,owned_total=owned_count(),owned_limit=2560,warm_retiring=#q.warm_retired,limit=1280,radius=128,mode='automatic_models',live_conversion=true,shared_collision_objects=false,nonfull_display_only=true}
 end
