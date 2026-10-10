@@ -19,6 +19,16 @@ Use Minecraft controls, combat, UI, items and building inside **OnimushaWotS**. 
 
 The Windows package contains the native plugin, Lua adapter, conversion worker and importable Minecraft instance. Minecraft, Java, Blender and REFramework are external prerequisites; no commercial game files, accounts or personal saves are bundled.
 
+## 实机截图 / Gameplay screenshots
+
+第一人称战斗、TNT 方块与吸魂奖励。 / First-person combat, TNT blocks and soul rewards.
+
+![第一人称战斗、TNT 与吸魂奖励 / First-person combat, TNT and soul rewards](docs/images/first-person-boss-battle.png)
+
+第三人称角色与铁傀儡。 / Third-person player and iron golem in the Onimusha world.
+
+![第三人称角色与铁傀儡 / Third-person player and iron golem](docs/images/third-person-iron-golem.png)
+
 ## 功能 / Features
 
 | 功能 / Feature | 当前行为 / Behavior |
