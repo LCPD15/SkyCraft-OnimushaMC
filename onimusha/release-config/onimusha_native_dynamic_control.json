@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "preload_only": false,
+  "max_instances": 768,
+  "per_frame": 2,
+  "streams": {
+    "hands": true,
+    "avatar": true,
+    "scene": true
+  }
+}

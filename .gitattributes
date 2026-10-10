@@ -1,0 +1,2 @@
+# Preserve the tested third-party snapshot; do not reformat upstream code.
+onimusha/release-deps/RE-Mesh-Editor/** -text -whitespace

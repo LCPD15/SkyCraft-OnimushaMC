@@ -1,74 +1,55 @@
-# SkyCraft — OnimushaMC
+# OnimushaMC / 鬼武者 × Minecraft
 
-**开发中的鬼武者适配 / Experimental Onimusha adapter.**
+**MOD制作：LCPD15/LCPD拉灯** · 基于 [chasmlol/SkyCraft](https://github.com/chasmlol/SkyCraft) 的鬼武者专用移植。
 
-本分支基于 [chasmlol/SkyCraft](https://github.com/chasmlol/SkyCraft)，把原有的 Minecraft Fabric 客户端、共享内存协议、方块网格和 HUD 输出接到鬼武者的 REFramework 插件。Minecraft 执行移动、视角、物品和战斗逻辑；鬼武者保留场景、敌人、任务和存档。
+在 **Onimusha: Way of the Sword / 鬼武者（OnimushaWotS）** 场景中使用 Minecraft 的角色控制、战斗、界面、物品和建造。F10 开关接管；原角色在接管期间隐藏。当前版本 **0.2.0**，Windows x64，单人本地桥接。
 
-This fork connects SkyCraft's Minecraft Fabric client, shared-memory protocol, block meshes and HUD to an Onimusha REFramework plugin. Minecraft owns movement, camera, items and combat; Onimusha retains its world, enemies, quests and saves.
+Use Minecraft controls, combat, UI, items and building inside **OnimushaWotS**. F10 toggles takeover and restores the original character when disabled. Version **0.2.0**, Windows x64, local single-player bridge.
 
-**当前范围仅限 `OnimushaWotS` / Target: `ONIMUSHA_WOTS` only.** 生化危机、怪物猎人以及其他 RE 引擎游戏需要独立的角色、相机、碰撞和伤害绑定，不能直接使用本适配。
+**只适用于本项目验证过的鬼武者版本；不是通用 RE 引擎插件。** 生化危机、怪物猎人等游戏需要独立的接口、资源格式和参数适配。
+**Onimusha only.** Other RE Engine games need separate API, format and parameter adapters.
 
-## 组件 / Components
+## 下载与文档 / Download and documentation
 
-| 路径 / Path | 用途 / Purpose |
+- [发布包 / Releases](https://github.com/LCPD15/SkyCraft-OnimushaMC/releases) — 下载 `OnimushaMC-v0.2.0-win64.zip`，包含插件、转换器、第三方转换依赖及 MC 实例导入包。
+- [安装与使用 / Install and play](docs/ONIMUSHA-INSTALL.md)
+- [源码构建 / Build from source](docs/ONIMUSHA-BUILD.md)
+- [版本说明 / Release notes](docs/ONIMUSHA-RELEASE-NOTES.md)
+- [第三方许可 / Third-party notices](docs/ONIMUSHA-THIRD-PARTY.md)
+
+The Windows package contains the native plugin, Lua adapter, conversion worker and importable Minecraft instance. Minecraft, Java, Blender and REFramework are external prerequisites; no commercial game files, accounts or personal saves are bundled.
+
+## 功能 / Features
+
+| 功能 / Feature | 当前行为 / Behavior |
 |---|---|
-| `fabric/` | MC 26.3 Fabric 分支：输入、角色、HUD、物品、MC 战斗与健康百分比 / Minecraft client bridge |
-| `protocol/skycraft_protocol.h` | 协议 v12；独立映射 `Local\OnimushaMC_v1` / Versioned shared-memory contract |
-| `onimusha/native/` | Windows x64 REFramework DLL、D3D11-on-12 绘制、通信与验证 / Native plugin and renderer |
-| `onimusha/adapter/` | 鬼武者 Lua 对象绑定和只读场景探针 / Game-specific adapter and diagnostic probe |
-| `onimusha/launcher/` | 隔离 Minecraft 安装及启动脚本 / Isolated launcher scripts |
-| `docs/onimusha-bindings.md` | 本地 TDB 与运行场景绑定证据 / Binding evidence |
-| `docs/README-Skyrim-upstream.md` | 上游 Skyrim 项目的原说明，仅作为来源记录 / Original upstream README |
+| 操作与界面 / Controls and UI | MC 第一、第三人称、背包、聊天命令；聊天时屏蔽鬼武者按键。First/third person, inventory and chat with host input isolation. |
+| 血量与护甲 / Health and armor | 原游戏血量按百分比映射到 MC 爱心；MC 护甲参与减伤。Native HP mapped to hearts; MC armor reduces incoming damage. |
+| 战斗 / Combat | 根据 MC 手持武器伤害结算原生攻击，有通用受击反馈；支持举盾／举剑格挡。Weapon damage, native hit feedback and shield/sword blocking. |
+| 伤害设置 / Damage tuning | REFramework 面板提供 100 / 500 / 1000 / 2000 / 5000 档，默认 100。Configurable native HP damage per MC damage point. |
+| 建造 / Building | 放置、拆除 MC 方块；完整方块可阻挡鬼武者玩家及敌人。Place/break MC blocks; solid cubes block native characters. |
+| 显示 / Rendering | 受支持的方块、人物、手持物、NPC、活动 TNT 转入 RE 原生光照和遮挡；转换结果本地缓存。Eligible geometry uses native lighting/occlusion and disk caching. |
+| 爆炸 / Explosions | MC 爆炸触发鬼武者油桶爆炸流程，影响敌人并破坏 MC 方块。Native explosion effects/damage with MC block destruction. |
+| MC 生物 / Mobs | 铁傀儡可在原生地形移动、攻击敌人；原生敌人的攻击体积可伤害 MC 生物。Golems navigate terrain and fight; native attack volumes damage MC mobs. |
+| 吸魂 / Souls | 按住 C 或右键吸魂，保留原奖励，额外随机回血、修耐久、加物品或经验。C/right mouse absorbs souls with an extra randomized MC reward. |
+| 恢复 / Restoration | F10 关闭后恢复原角色、输入并撤除 MOD 的活动碰撞／显示；死亡交回原游戏重试。Native retry owns death; takeover objects are cleaned up on release. |
 
-## 行为 / Behavior
+这是两端运行的桥接：Minecraft 负责 MC 规则，REFramework 插件负责鬼武者接口；可转换几何交给 RE 原生绘制，HUD 和尚不支持的内容保留 MC 合成回退。**并非所有内容都只是画面叠加，也不是任意 MC 模组的通用移植器。**
+Minecraft runs the MC simulation; the REFramework plugin handles host interaction. Converted geometry is drawn natively by RE, while HUD and unsupported content retain compositing fallback.
 
-- MC 3C、背包、手持物品和 HUD 通过插件绘制到鬼武者。成功接管后隐藏原玩家绘制；连接、绑定、地形、相机或 GPU 未就绪时保持原游戏可见。
-- MC 输入及 MC 武器伤害通过协议传递。原游戏实际血量仍是权威值：`MC 血量 = clamp(原血量 / 原最大血量, 0, 1) × 20`。例如原游戏 75/100 血量显示为 7.5 颗心。收到尚未结算的原游戏伤害时，由 MC 护甲和盾牌计算，再按最大血量比例回写。
-- 原游戏地形作为 MC 碰撞来源。原地形不能被挖掉；MC 放置的方块可放置和拆除。鬼武者实体方块碰撞需要通过游戏适配器的注册检查。
-- 场景切换使用 epoch 清空旧地形和事件。传送确认、菜单、过场、MC 断开或禁用时停止接管；失焦时释放 MC 输入。
+## 兼容边界 / Compatibility limits
 
-MC character, camera, inventory, held items and HUD are rendered inside the host. Host HP is authoritative and mapped proportionally to ten Minecraft hearts. Original terrain is protected; placed MC blocks can be built and removed. Takeover requires verified game bindings, collision, camera, renderer and teleport acknowledgement. Scene changes and disconnects release control.
+验证组合：鬼武者 01.000.001 / TDB82；Minecraft 26.3；Fabric Loader 0.19.5；Fabric API 0.161.0+26.3；Java 25；Blender 5.2；RE Mesh Editor 0.66（随转换器附带）。REFramework API 固定修订见构建说明。
+Tested versions are listed above; use them for the first installation.
 
-上述内容是代码设计；实际游戏验证状态见 [验证记录](docs/ONIMUSHA-VALIDATION.md)。不要把独立通信或 GPU 测试当作鬼武者完整玩法测试。
+- 只拆除 MC 方块，不拆原游戏场景。Native terrain cannot be mined.
+- 原生碰撞上限 1280，当前在玩家附近约 16 米维护；静态原生绘制半径约 128 米。不同形状、透明／动画材质、自定义渲染器可能回退到 MC 绘制。Native collision is bounded; unsupported geometry/materials may fall back.
+- 首次遇到新外观需要转换，之后复用磁盘缓存；硬件和模型复杂度影响首次延迟。New appearances need an initial conversion.
+- 原生敌人能被方块挡住，但尚未完成原生 AI 动态导航网格重建。Blocking is supported; full native navigation rebuild is not.
+- 处决动画接管、任意敌人的近镜头渐隐、所有 Boss 阶段／场景切换仍未做全面兼容保证。Executions, all camera-fade cases and every boss/scene transition are not universally validated.
+- 添加其他 MC 模组需匹配同一 MC/Fabric 版本。机械动力等复杂机器、专有渲染器／实体及联网玩法未验证。Other mods and multiplayer are not guaranteed compatible.
 
-2026-10-07：MC 对敌伤害倍率从10改为100，即之前的十倍，玩家受伤／治疗百分比不变。相机时序修正与额外候选的实测边界见[停点记录](docs/ONIMUSHA-RESUME.md)。光照、遮挡、碰撞、寻路、伤害平衡、处决与格挡的证据和实施路线集中在[研究入口](docs/ONIMUSHA-OVERNIGHT-RESEARCH.md)；这些原生机制尚未全部实现。
+## 许可 / License
 
-These are implementation goals and code paths. See the [validation record](docs/ONIMUSHA-VALIDATION.md) for the current evidence; IPC and GPU smoke tests do not establish full in-game functionality.
-
-## 版本与构建 / Versions and build
-
-开发环境：Windows x64、Minecraft 26.3、Fabric Loader 0.19.5、Fabric API 0.161.0+26.3、JDK 25、Gradle 9.7.1、Visual Studio 2026。
-
-REFramework 的头文件和 Lua 固定于本机已安装版本对应提交 `b6baf6b406efc65e077b99cb4d9ad25b0a0a9095`。升级框架必须重新检查 ABI 和游戏 TDB 绑定。
-
-```powershell
-# Run from this repository, with JAVA_HOME pointing to JDK 25.
-cd fabric
-.\gradlew.bat test build
-
-# Native plugin: Windows x64 Visual Studio toolchain.
-cmake -S onimusha -B build/onimusha -A x64
-cmake --build build/onimusha --config Release
-ctest --test-dir build/onimusha -C Release --output-on-failure
-```
-
-Minecraft 正式运行通过隔离 PCL 配置登录。`MC-launch-dev.ps1` 是不读取用户凭据的本地开发测试入口；不提供线上身份验证。MC 安装、资产、登录状态、构建产物和游戏探针快照都不提交到源码库。
-
-Use the isolated PCL profile for normal authenticated play. `MC-launch-dev.ps1` is a local developer test entry point without account credentials or online authentication. Minecraft binaries, assets, credentials, build products and live probe snapshots are excluded from this repository.
-
-## 控制 / Controls
-
-| 键 / Key | 行为 / Action |
-|---|---|
-| F10 | 开启或关闭接管 / Toggle takeover |
-| WASD、空格、Shift | MC 移动、跳跃、潜行 / Movement, jump, crouch |
-| 鼠标、左右键、滚轮 | MC 视角、攻击、放置及物品栏 / Look, attack, place, hotbar |
-| E / F5 / O | MC 背包 / 视角切换 / 菜单 / Inventory / camera mode / menu |
-| Insert | REFramework 界面 / REFramework UI |
-| Escape、G（未打开 MC 界面时） | 保留原游戏菜单与交互通路 / Host menu and interaction pass-through |
-
-## 作者与许可 / Credits and license
-
-MOD制作：LCPD15/LCPD拉灯
-
-Original SkyCraft: **chasmlol**. MIT license and upstream copyright are retained in [LICENSE](LICENSE). REFramework headers and vendored Lua retain their original notices. Minecraft and Fabric dependencies are downloaded from their official distribution metadata and are not included in Git source.
+项目主体沿用 [MIT](LICENSE)，原作者 chasmlol。独立 Blender 转换进程使用的 RE Mesh Editor 保留 GPL 许可和完整对应源码；并不改写为 MIT。第三方许可随包提供。Minecraft/Mojang/Microsoft、Capcom 与本项目无隶属或背书关系。
+The project retains the upstream MIT license. The separate Blender worker uses RE Mesh Editor under its own GPL terms with source and notices included. This is an unofficial project.
