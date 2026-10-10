@@ -5,6 +5,50 @@
 
 ## 最新结果与下一步
 
+### 2026-10-10 15:20 MC 生物承伤候选已安装；游戏已正常关闭
+
+用户最新要求“继续，接入MC生物承伤”。已实现protocol16独立宿主攻击环＋第八个Lua payload＋MC
+LivingEntity.hurtServer承伤，读取真实注册攻击组，支持胶囊／连续胶囊、球体、OBB及敌人shell的通用读取；
+不逐敌人／逐招映射，不把玩家扣血广播给附近生物。去重、连续命中间隔、MC护甲与生命周期门控已加入。
+原生基础攻击强度按原生玩家maxHP换算MC20点单位，再由目标MC防御结算；不是复刻原生最终减伤公式。
+敌人主动选择MC生物为仇恨目标尚未实现。特殊自定义形状、处决和元素效果未映射。
+
+85项JVM测试、3项CTest（含真实DLL Lua API）、12套相关Lua脚本通过。
+独立MC世界＋独立IPC实际承伤通过：近处铁傀儡100→96→92，20护甲目标100→98.88，
+范围外目标不变，同一挥击不重复扣血，关闭通道不扣血，致死与玩家排除均通过。
+鬼武者对正式Lua只读预检成功读取9个形状和当前参数；拒绝1个未初始化球体，未发布伤害。
+**尚未由真实鬼武者敌人实际击中MC生物验证，尤其shell读取与多段攻击不能标注已实战通过。**
+
+用户要求检查后关两个游戏：15:12:57 MC主线程stop，日志确认Saving players/worlds/chunks；
+随后Onimusha CloseMainWindow成功。游戏111740、MC110928及转换器均已退出，没有强杀Java。
+原世界89文件完整备份并SHA256一致：
+`runtime/test-backups/before-npc-incoming-20261010-1514/OnimushaMC-XYZ-v2`。
+已安装同步protocol16 DLL/JAR、loader和8个payload；83项游戏部署manifest一致，原配置不变。
+安装旧文件备份：`runtime/test-backups/npc-incoming-install-20261010-151955`。
+证据、只读预检、独立世界结果、保存日志及安装收据：`logs/npc-incoming-20261010/`。
+正文见 [缓存与NPC承伤](ONIMUSHA-DYNAMIC-CACHE-AND-NPC-HITS.md)。没有改库存、经验或生命NBT。
+
+下一步：用户启动并连接原世界后，**一次性**测试敌人挥击轨迹内／外各一只铁傀儡、连续两次攻击，
+顺便验证玩家格挡与受击、F10关闭恢复。攻击日志NATIVE_MOB_HIT记录UUID、AttackUniqueID/HitID、
+原始MC点数和前后HP；Lua状态`onimusha_npc_damage_status.json`记录数量、错误和扫描耗时。
+本轮不再让用户额外受击补采。不启动旧协议15 MC，不用旧安装器重置StageA配置。
+
+### 2026-10-10 13:53 玩家命中采样成功；后续需集中测试
+
+启动黑屏在保持原安装/配置不变、结束挂起进程并由 Steam 重启后恢复，已实看主菜单；
+卡住阶段是 REFramework 等待渲染初始化并反复 D3D12 rehook，尚不能归因到具体模块。
+MC 与游戏目前重新运行，用户处于暂停菜单；不应继续套用凌晨“已关闭”的状态。
+
+真实受击已捕获：frame50241、Em514_00→Player_00、AttackUniqueID77/HitID42，
+ContinuousCapsuleShape 启用，命中点位于变换后 AABB 内。同帧 addHealth(-213)→MC2.13点→
+frame50242血量1320→1107，回读一致。HitInfo.AttackParamData 此阶段为空，完整胶囊参数和最终
+攻击参数取得阶段仍未验证，NPC承伤仍未实现。探针和限时等待辅助进程已停止。
+证据 logs/npc-hit-check-20261010-1337/correlation.json 及同目录原始记录。
+
+用户明确要求集中测试：以后先自测并合并相关探针、延长等待实际操作的窗口，再一次给出完整操作清单，
+同时采集碰撞、伤害、格挡/连续命中、MC生物和恢复状态。不要为每个字段单独请求一次受击；
+本条真实命中无需再补测。详见 ONIMUSHA-DYNAMIC-CACHE-AND-NPC-HITS.md 的实测补充。
+
 ### 2026-10-10 动态实例缓存修正；NPC 承伤检查停点
 
 用户已确认可见窗口、放拆与聊天正常；此前放置失败确认为误用了 Adventure，已恢复 Survival。

@@ -24,7 +24,7 @@ sdk.hook({get_function=function() return 99 end},function() _G.pre_count=pre_cou
 re.on_script_reset(function() _G.cleanups=cleanups+1;if cleanup_fail then error('cleanup injected') end end)
 ]]
 files['onimusha_mc/scripts/onimusha_mc.lua']=payload
-for _,n in ipairs({'onimusha_enemy_hit.lua','onimusha_guard_probe.lua','onimusha_combat_inventory.lua','onimusha_native_blocks.lua','onimusha_native_models.lua','onimusha_soul.lua'}) do files['onimusha_mc/scripts/'..n]='-- valid empty test module' end
+for _,n in ipairs({'onimusha_enemy_hit.lua','onimusha_guard_probe.lua','onimusha_combat_inventory.lua','onimusha_native_blocks.lua','onimusha_native_models.lua','onimusha_soul.lua','onimusha_npc_damage.lua'}) do files['onimusha_mc/scripts/'..n]='-- valid empty test module' end
 function advance(n)
  for _=1,n do
   local list=events.LateUpdateBehavior or {};local copy={table.unpack(list)}

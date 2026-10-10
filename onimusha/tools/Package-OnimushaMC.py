@@ -26,7 +26,7 @@ release = {
     'reframework/plugins/OnimushaMC.dll': a.native_dll or root / 'build/native/Release/OnimushaMC.dll',
     'reframework/autorun/onimusha_loader.lua': repo / 'onimusha/adapter/onimusha_loader.lua',
     **{'reframework/data/onimusha_mc/scripts/' + name: repo / 'onimusha/adapter' / name
-       for name in ('onimusha_mc.lua','onimusha_enemy_hit.lua','onimusha_guard_probe.lua','onimusha_combat_inventory.lua','onimusha_native_blocks.lua','onimusha_native_models.lua','onimusha_soul.lua')},
+       for name in ('onimusha_mc.lua','onimusha_enemy_hit.lua','onimusha_guard_probe.lua','onimusha_combat_inventory.lua','onimusha_native_blocks.lua','onimusha_native_models.lua','onimusha_soul.lua','onimusha_npc_damage.lua')},
     'reframework/data/onimusha_enemy_hit_control.json': repo / 'onimusha/config/onimusha_enemy_hit_control.json',
     'reframework/data/onimusha_explosion_control.json': repo / 'onimusha/config/onimusha_explosion_control.json',
     'reframework/data/onimusha_mc_config.json': repo / 'onimusha/config/onimusha_mc_config.json',

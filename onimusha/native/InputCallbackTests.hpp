@@ -79,6 +79,16 @@ inline bool input_callback_tests(lua_State* L,REFrameworkRendererData& render,RE
         )";
         peer.publish(true);if(luaL_dostring(L,setup)!=LUA_OK)throw std::runtime_error(lua_tostring(L,-1));present();
         if(luaL_dostring(L,"local s=onimusha_mc.status();assert(s.ready and s.not_ready_reason=='ready' and s.re_ui_sampled and not s.re_ui_open and s.mc_pid>0 and s.collision_epoch==9 and math.type(s.collision_publish_seq)=='integer')")!=LUA_OK)throw std::runtime_error("input callback ready/diagnostic gate");
+        const char* attacks=R"(
+            assert(not onimusha_mc.publish_attacks(true,{1}))
+            assert(not onimusha_mc.publish_attacks(true,{{geometry=3}}))
+            local g={};for i=1,24 do g[i]=0 end;g[7]=0.5;g[14]=0.5
+            local a={attacker=1001,attack=77,hit=1,shape=1,flags=0,max_hits=1,damage=4,repeat_seconds=0,x=0,y=0,z=0,geometry=g}
+            assert(onimusha_mc.publish_attacks(true,{a}))
+            assert(onimusha_mc.status().npc_attack_published==1)
+            assert(onimusha_mc.publish_attacks(false,{}))
+        )";
+        if(luaL_dostring(L,attacks)!=LUA_OK)throw std::runtime_error(lua_tostring(L,-1));
         const HWND foreground=GetForegroundWindow();RECT rect{};if(!foreground||!GetClientRect(foreground,&rect)||rect.right<16||rect.bottom<16)throw std::runtime_error("No usable foreground HWND for read-only focus check");
         const int w=rect.right,h=rect.bottom,x=w/4,y=h*3/4;const auto pos=[](int a,int b){return LPARAM(MAKELPARAM(a,b));};peer.drain();
         const auto check_cursor=[&](int a,int b){const auto events=peer.drain();return events.size()==1&&events[0].type==proto::kInCursor&&events[0].a==a&&events[0].b==b;};

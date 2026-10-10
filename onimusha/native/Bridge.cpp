@@ -62,6 +62,8 @@ bool Bridge::open(std::wstring_view mappingName){
     std::memset(base_+proto::kOffCollisionRing,0,proto::kColRingDataOff);
     std::memset(base_+proto::kOffEventRing,0,proto::kEventRingDataOff);
     std::memset(base_+proto::kOffRenderRing,0,proto::kRenRingDataOff);
+    std::memset(base_+proto::kOffAttackRing,0,proto::kAttackRingDataOff);
+    attacksEnabled_=false;attackSession_=0;attackEpoch_=0;attackWorld_=0;attackPid_=0;
     std::memset(base_+proto::kOffActorTable,0,sizeof(proto::ActorTable));
     std::memset(base_+proto::kOffWorldEntities,0,sizeof(proto::WorldEntities));
     auto* water=reinterpret_cast<proto::WaterGrid*>(base_+proto::kOffWaterGrid);std::memset(water,0,sizeof(*water));std::fill(std::begin(water->surface),std::end(water->surface),proto::kNoWater);
@@ -70,6 +72,7 @@ bool Bridge::open(std::wstring_view mappingName){
     atom(h->magic).store(proto::kMagic,std::memory_order_release);return true;
 }
 void Bridge::close(){
+    if(base_)publish_attacks(false,attackEpoch_,attackWorld_,{});
     // Preserve the last host PID: Fabric's quit watchdog uses ProcessHandle.isAlive(pid).
     // Clearing it to zero would skip that watchdog and leave a hidden MC process running.
     if(base_){auto* h=reinterpret_cast<proto::Header*>(base_);atom(h->skyrimHeartbeatMs).store(0,std::memory_order_release);UnmapViewOfFile(base_);base_=nullptr;invalidate_collision();observedMcPid_=0;observedConnected_=false;}
@@ -96,6 +99,39 @@ bool Bridge::input(std::uint16_t type,std::uint16_t code,std::int32_t a,std::int
 }
 bool Bridge::publish_actors(std::span<const proto::ActorRecord> actors){
     if(!base_||actors.size()>proto::kMaxActors)return false;proto::ActorTable t{};t.count=std::uint32_t(actors.size());std::copy(actors.begin(),actors.end(),std::begin(t.actors));write_seq(base_,proto::kOffActorTable,t);return true;
+}
+bool Bridge::publish_attacks(bool enabled,std::uint32_t epoch,std::uint32_t world,std::span<const proto::NativeAttack> rows){
+    if(!base_)return false;
+    auto* ring=base_+proto::kOffAttackRing;
+    auto& gate=*reinterpret_cast<std::uint32_t*>(ring+8);
+    const auto pid=atom(reinterpret_cast<proto::Header*>(base_)->mcPid).load(std::memory_order_acquire);
+    enabled=enabled&&alive();
+    if(enabled!=attacksEnabled_||epoch!=attackEpoch_||world!=attackWorld_||pid!=attackPid_){
+        atom(gate).store(0,std::memory_order_release);
+        if(++attackSession_==0)++attackSession_;
+        atom(*reinterpret_cast<std::uint32_t*>(ring+12)).store(attackSession_,std::memory_order_release);
+        *reinterpret_cast<std::uint32_t*>(ring+16)=epoch;*reinterpret_cast<std::uint32_t*>(ring+20)=world;
+        attackEpoch_=epoch;attackWorld_=world;attackPid_=pid;attacksEnabled_=enabled;
+    }
+    atom(gate).store(enabled?1:0,std::memory_order_release);
+    if(!enabled)return rows.empty();
+    if(rows.size()>128){++attackRejected;return false;}
+    auto& hr=*reinterpret_cast<std::uint64_t*>(ring);auto& tr=*reinterpret_cast<std::uint64_t*>(ring+0x40);
+    auto head=atom(hr).load(std::memory_order_relaxed);const auto tail=atom(tr).load(std::memory_order_acquire);
+    if(tail>head||head-tail+rows.size()>proto::kAttackRingEntries){++attackRejected;return false;}
+    for(auto r:rows){
+        bool valid=r.attackerId&&r.attackId>=0&&r.hitId>=0&&(r.shape==1||r.shape==2)&&!(r.flags&~1u)
+            &&std::isfinite(r.damage)&&r.damage>0&&r.damage<=10000&&std::isfinite(r.repeatSeconds)
+            &&r.repeatSeconds>=0&&r.repeatSeconds<=3600&&r.maxHits<=100000;
+        for(float v:r.origin)valid=valid&&std::isfinite(v)&&std::abs(v)<=30000000;
+        for(float v:r.geometry)valid=valid&&std::isfinite(v)&&std::abs(v)<=30000000;
+        if(!valid){++attackRejected;return false;}
+    }
+    for(auto r:rows){
+        r.session=attackSession_;r.epoch=epoch;r.worldId=world;r.timeMs=GetTickCount64();
+        reinterpret_cast<proto::NativeAttack*>(ring+proto::kAttackRingDataOff)[head++&(proto::kAttackRingEntries-1)]=r;
+    }
+    atom(hr).store(head,std::memory_order_release);attackPublished+=rows.size();return true;
 }
 void Bridge::invalidate_collision(){++collisionGeneration_;collisionBatches_.clear();collisionBatchEnd_=0;lastEpoch_=~0u;}
 void Bridge::refresh_collision_link(){

@@ -55,7 +55,8 @@ int wmain(int argc,wchar_t** argv){
     const char* script=R"(
         assert(type(onimusha_mc)=="table")
         local s=onimusha_mc.status()
-        assert(s.protocol==15 and s.mapping=="Local\\OnimushaMC_v1")
+        assert(s.protocol==16 and s.mapping=="Local\\OnimushaMC_v1")
+        assert(onimusha_mc.publish_attacks(false,{}))
         assert(onimusha_mc.snapshot_full_cubes({})==nil)
         assert(not onimusha_mc.snapshot_sections().ready and #onimusha_mc.snapshot_sections().sections==0)
         assert(onimusha_mc.capture_section({sx=0,sy=0,sz=0,revision=1,epoch=0})==nil)

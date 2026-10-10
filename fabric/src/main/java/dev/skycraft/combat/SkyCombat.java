@@ -101,6 +101,7 @@ public final class SkyCombat {
 		if (actorsRead) {
 			sync(level, session);
 		}
+		NativeMobDamage.tick(server);
 		// Hits land during the tick (melee, sweeps, arrows, fire); send one combined hit per actor.
 		for (SkyrimActorEntity proxy : PROXIES.values()) {
 			float[] hit = proxy.takeHit();

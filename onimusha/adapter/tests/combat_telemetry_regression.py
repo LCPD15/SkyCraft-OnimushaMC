@@ -48,7 +48,7 @@ end
 local function same(a,b) return a==b end
 local function td(type_name)
  return {get_method=function(_,name)
-  return {get_function=function() return 4660 end,name=name,type_name=type_name}
+  return {get_function=function() return 4660 end,get_num_params=function() return 0 end,name=name,type_name=type_name}
  end}
 end
 sdk={PreHookResult={SKIP_ORIGINAL=777},to_managed_object=function(value) return value end,

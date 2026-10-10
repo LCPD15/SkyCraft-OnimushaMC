@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test;
 
 class OnimushaProtocolTest {
 	@Test void forkCannotAttachToUpstreamSkyrimMapping() {
-		assertEquals(15, Proto.VERSION);
+		assertEquals(16, Proto.VERSION);
 		assertEquals("Local\\OnimushaMC_v1", Proto.MAPPING_NAME);
 		assertNotEquals("Local\\SkyCraft_v1", Proto.MAPPING_NAME);
 	}

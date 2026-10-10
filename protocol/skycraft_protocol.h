@@ -13,7 +13,7 @@
 namespace skycraft::proto
 {
 	inline constexpr std::uint32_t kMagic = 0x43594B53;  // "SKYC"
-	inline constexpr std::uint32_t kVersion = 15;
+	inline constexpr std::uint32_t kVersion = 16;
 	inline constexpr wchar_t       kMappingName[] = L"Local\\OnimushaMC_v1";
 
 	// 1 Minecraft block == 70 Skyrim units (Skyrim player ~128 units tall, MC player 1.8 blocks).
@@ -39,7 +39,28 @@ namespace skycraft::proto
 	inline constexpr std::uint64_t kOffWorldEntities = 0x1C000;  // MC -> Skyrim, see WorldEntities
 	inline constexpr std::uint64_t kOffRenderRing = kOffOverlayPixels + kOverlaySlotBytes * kOverlaySlots;
 	inline constexpr std::uint64_t kRenderRingBytes = 64ull << 20;
-	inline constexpr std::uint64_t kMappingBytes = kOffRenderRing + kRenderRingBytes;
+	inline constexpr std::uint64_t kOffAttackRing = kOffRenderRing + kRenderRingBytes;
+	inline constexpr std::uint32_t kAttackRingEntries = 4096;
+	inline constexpr std::uint64_t kAttackRingDataOff = 0x80;
+	inline constexpr std::uint64_t kAttackRecordBytes = 192;
+	inline constexpr std::uint64_t kMappingBytes = kOffAttackRing + kAttackRingDataOff + kAttackRingEntries*kAttackRecordBytes;
+
+	// Host -> MC, single producer/consumer. head @0, enabled/session/epoch/world @8/12/16/20;
+	// tail @0x40. Disabling changes session: queued attacks cannot survive F10 or a reload.
+	// Numeric owned copies only; never cross-process SDK pointers. MC coordinates, blocks.
+	// shape: 1 capsule (a,b,r + previous a,b,r), 2 OBB (center, axes x/y/z, half extents).
+	struct NativeAttack {
+		std::uint64_t timeMs;
+		std::uint32_t session, epoch, worldId, attackerId;
+		std::int32_t attackId, hitId;
+		std::uint32_t shape, flags; // bit0: native multi-hit enabled
+		float damage, repeatSeconds;
+		std::uint32_t maxHits, reserved;
+		float origin[3];
+		float geometry[24];
+		std::uint32_t padding[7];
+	};
+	static_assert(sizeof(NativeAttack)==kAttackRecordBytes);
 
 	// ---- header @0x0 ------------------------------------------------------------------------
 	struct Header

@@ -2615,7 +2615,12 @@ re.on_draw_ui(function()
         imgui.tree_pop()
     end
 end)
-_G.onimusha_adapter_lifecycle={ready_for_reload=function()
+_G.onimusha_adapter_lifecycle={combat_context=function()
+    if not state.active then return end
+    local maximum=call(state.health,'get_MaxHealth')
+    if not maximum or maximum<=0 then return end
+    return {actors=state.actors,map=mcpos,units=cfg.units_per_block,max_health=maximum}
+end,ready_for_reload=function()
     return not state.active and not restoration_pending() and not state.hidden
         and (state.health_bypass or 0)==0
         and (not _G.onimusha_native_blocks or not _G.onimusha_native_blocks.busy())

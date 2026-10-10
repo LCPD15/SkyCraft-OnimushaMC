@@ -26,6 +26,8 @@ public:
     bool read_mc(proto::McState& s) const;
     bool input(std::uint16_t type,std::uint16_t code=0,std::int32_t a=0,std::int32_t b=0,std::int32_t c=0);
     bool publish_actors(std::span<const proto::ActorRecord> actors);
+    bool publish_attacks(bool enabled,std::uint32_t epoch,std::uint32_t world,std::span<const proto::NativeAttack> attacks);
+    std::uint64_t attackPublished{},attackRejected{};
     bool publish_collision(std::uint32_t epoch,const proto::ColRegion& region,std::span<const proto::ColTri> triangles);
     bool publish_packed_collision(std::uint32_t epoch,std::vector<CollisionPacket> packets);
     CollisionStatus collision_status();
@@ -51,5 +53,7 @@ private:
     std::uint64_t collisionGeneration_{},collisionPublishSeq_{},collisionConsumedSeq_{},collisionBatchEnd_{};
     std::uint32_t observedMcPid_{};
     bool observedConnected_{};
+    bool attacksEnabled_{};
+    std::uint32_t attackSession_{},attackEpoch_{},attackWorld_{},attackPid_{};
 };
 }

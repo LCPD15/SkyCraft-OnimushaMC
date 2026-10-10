@@ -218,13 +218,33 @@ local function colliders(enemy)
         local sets=call(group,'get_NumRequestSets');assert(sets>=0 and sets<=128,'Unexpected set count')
         for j=0,sets-1 do
             local set={index=j,id=call(group,'getRequestSetIdFromIndex(System.UInt32)',j),colliders={}}
+            set.registered=call(rsc,'isRegisteredRequestSet(System.UInt32, System.UInt32)',item.id,set.id)
+            local parent=call(rsc,'getRequestSetUserData(System.UInt32, System.UInt32)',item.id,set.id)
+            if parent and parent:get_type_definition():is_a('app.col_user_data.AttackParamBase') then
+                local ok,v=pcall(function()
+                    local d=switch:get_field('_ReqSetRuntimeDataDic')
+                    return snapshot(call(d,'get_Item',parent),3,{})
+                end)
+                set.runtime=ok and v or nil;set.runtime_error=not ok and tostring(v) or nil
+                local category=call(parent,'getAttackInfoCategory')
+                local unique=ok and v and v.fields and v.fields._AttackUniqueID
+                local ok2,p=pcall(function()return call(call(entity,'get_AttackParamSupporter'),'findAttackParamByKey(System.UInt32)',assert(unique))end)
+                set.category=category;set.param=ok2 and snapshot(p,3,{}) or nil
+                set.param_error=not ok2 and tostring(p) or nil
+            end
             local n=call(rsc,'getNumCollidablesFromIndex(System.UInt32, System.UInt32)',item.id,j)
             assert(n>=0 and n<=128,'Unexpected collidable count')
             for k=0,n-1 do
                 local col=call(rsc,'getCollidableFromIndex(System.UInt32, System.UInt32, System.UInt32)',item.id,j,k)
                 local ud=call(col,'get_UserData')
                 local parent=ud and ud:get_type_definition():get_method('get_ParentUserData') and call(ud,'get_ParentUserData')
-                set.colliders[#set.colliders+1]={index=k,enabled=call(col,'get_Enabled'),
+                local sh=call(col,'get_TransformedShape');local shape_info={type=typ(sh)}
+                for _,getter in ipairs({'get_Capsule','get_PreviousCapsule','get_Sphere','get_PreviousSphere','get_Box'})do
+                    if sh and sh:get_type_definition():get_method(getter) then
+                        local ok,value=pcall(call,sh,getter);shape_info[getter]=ok and snapshot(value,2,{}) or {error=tostring(value)}
+                    end
+                end
+                set.colliders[#set.colliders+1]={index=k,enabled=call(col,'get_Enabled'),shape=shape_info,
                     aabb=snapshot(call(col,'get_BoundingAabb'),2,{}),
                     world_shape=snapshot(call(call(col,'get_TransformedShape'),'get_BoundingAabb'),2,{}),
                     userdata=snapshot(ud,1,{}),parent_userdata=snapshot(parent,2,{})}
@@ -369,6 +389,17 @@ local function inspect(c)
     local roots={player=player,entity=entity,supporter=supporter,
         asset=supporter:get_field('_AttackParamData'),weapon=call(entity,'get_Weapon')}
     local result={id=c.id,frame=state.frame,queries={},enemy_count=#enemies}
+    if c.npc_preflight==true then
+        -- The fixed exporter is evaluated with callbacks disabled: numeric readback only.
+        local env=setmetatable({re={on_application_entry=function()end,on_script_reset=function()end}},{__index=_G})
+        local module=assert(load(fs.read('onimusha_mc/scripts/onimusha_npc_damage.lua'),'@npc_preflight','t',env))()
+        local actors={};for i,e in ipairs(enemies)do
+            assert(i<=256,'Unexpected enemy count')
+            actors[i]={id=i,obj=e,name=call(call(e,'get_GameObject'),'get_Name'),health=call(call(call(e,'get_Context'),'get_Chara'),'get_HealthManager')}
+        end
+        local health=call(call(call(player,'get_Context'),'get_Chara'),'get_HealthManager')
+        result.npc_preflight=module.preflight({actors=actors,units=1,max_health=call(health,'get_MaxHealth'),map=function(p)return p end})
+    end
     for i,q in ipairs(c.queries or {}) do
         if i>40 then break end
         local ok,value=pcall(function()

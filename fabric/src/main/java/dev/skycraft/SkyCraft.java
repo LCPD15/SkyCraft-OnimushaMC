@@ -32,6 +32,7 @@ public final class SkyCraft implements ModInitializer {
 		dev.skycraft.world.MobTerrainSmoke.init();
 		dev.skycraft.combat.OnimushaSwordGuard.init();
 		SkyCombat.init();
+		dev.skycraft.combat.NativeMobDamageSmoke.init();
 		dev.skycraft.combat.HostHealth.init();
 		dev.skycraft.net.SkyNet.init();
 		dev.skycraft.world.SkyDig.init();

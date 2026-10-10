@@ -32,6 +32,7 @@ int peer(const wchar_t* name){
     UnmapViewOfFile(b);CloseHandle(map);return 0;
 }
 }
+#include "AttackTransportTests.hpp"
 int wmain(int argc,wchar_t** argv){
     if(argc>3&&std::wstring(argv[1])==L"--collision-peer")return omc::tests::collision_peer(argv[2],std::uint32_t(std::wcstoul(argv[3],nullptr,10)));
     if(argc>2&&std::wstring(argv[1])==L"--peer")return peer(argv[2]);
@@ -85,6 +86,7 @@ int wmain(int argc,wchar_t** argv){
     if(started){WaitForSingleObject(pi.hProcess,10000);DWORD exit{};GetExitCodeProcess(pi.hProcess,&exit);check(exit==0,"peer validates layout and consumes input");CloseHandle(pi.hThread);CloseHandle(pi.hProcess);}
     proto::McState mc{};check(link.read_mc(mc)&&mc.x==4.25&&mc.y==9,"read peer seqlock state");auto events=link.events();check(events.size()==1&&events[0].formId==101&&events[0].a==3,"consume peer combat event");check(link.events().empty(),"event consumed exactly once");
     OverlayFrame frame;check(link.overlay(frame)&&frame.frameId==77&&frame.rgba.size()==8&&frame.rgba[7]==7,"triple-buffer deep-copy ownership");check(!link.overlay(frame),"no duplicate overlay acquire");
+    test_attack_transport(link);
     auto* base=link.testing_base();auto* state=reinterpret_cast<proto::McState*>(base+proto::kOffMcState);state->x=std::numeric_limits<double>::quiet_NaN();check(!link.read_mc(mc),"reject non-finite movement");
     RenderStore store;proto::RenAtlas ah{2,2};std::uint8_t pixels[16]{};auto ap=payload(ah,std::span<const std::uint8_t>(pixels));check(store.consume(proto::kRenAtlas,ap)&&store.atlas.rgba.size()==16,"decode atlas");ap.pop_back();check(!store.consume(proto::kRenAtlas,ap),"reject truncated texture");
     proto::ColRegion cr{-8,56,-8,15,71,15,1,0};proto::ColTri floor[2]={{{-8,65,-8,-8,65,16,16,65,-8},proto::kTriTerrain},{{16,65,-8,-8,65,16,16,65,16},proto::kTriTerrain}};

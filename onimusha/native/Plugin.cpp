@@ -1,4 +1,5 @@
 #include "Bridge.hpp"
+#include <type_traits>
 #include "CollisionPacking.hpp"
 #include "InputRouting.hpp"
 #include "Renderer.hpp"
@@ -97,7 +98,7 @@ const char* not_ready_reason(const CollisionStatus* supplied=nullptr){
     return nullptr;
 }
 bool active(){return not_ready_reason()==nullptr;}
-void release(){pendingRelease=!bridge.input(proto::kInReleaseAll);routed=false;mouseRouter.release();pendingGuiCursor=false;renderer::set_gui_cursor(false);surrogate=0;}
+void release(){bridge.publish_attacks(false,host.collisionEpoch,host.worldId,{});pendingRelease=!bridge.input(proto::kInReleaseAll);routed=false;mouseRouter.release();pendingGuiCursor=false;renderer::set_gui_cursor(false);surrogate=0;}
 bool retry_pending_release(){if(pendingRelease)pendingRelease=!bridge.input(proto::kInReleaseAll);return !pendingRelease;}
 bool publish_gui_cursor(){
     const auto& cursor=mouseRouter.cursor();if(!cursor.known())return false;
@@ -172,8 +173,31 @@ int send_hurt(lua_State* L){
     const bool ok=active()&&points>0&&bridge.input(proto::kInHurt,kind,std::int32_t(std::llround(points*100)),std::int32_t(number(L,1,"attacker_id")),std::int32_t(number(L,1,"flags"))|4);
     lua_pushboolean(L,ok);return 1;
 }
+int publish_attacks(lua_State* L){
+    std::scoped_lock lock(mutex);
+    const bool on=lua_toboolean(L,1)&&active();
+    if(!on){lua_pushboolean(L,bridge.publish_attacks(false,host.collisionEpoch,host.worldId,{}));return 1;}
+    if(!lua_istable(L,2)||lua_rawlen(L,2)>128){lua_pushboolean(L,false);return 1;}
+    std::vector<proto::NativeAttack> rows;
+    for(std::size_t i=1;i<=lua_rawlen(L,2);++i){
+        lua_rawgeti(L,2,lua_Integer(i));const int t=lua_gettop(L);proto::NativeAttack r{};
+        if(!lua_istable(L,t)){lua_pop(L,1);lua_pushboolean(L,false);return 1;}
+        auto integer=[&](const char* key,std::int64_t lo,std::int64_t hi,auto& out){double v{};if(!valid_number(L,t,key,v)||v!=std::floor(v)||v<double(lo)||v>double(hi))return false;out=static_cast<std::remove_reference_t<decltype(out)>>(v);return true;};
+        bool valid=lua_istable(L,t)&&integer("attacker",1,0xFFFFFFFF,r.attackerId)&&integer("attack",0,0x7FFFFFFF,r.attackId)
+            &&integer("hit",0,0x7FFFFFFF,r.hitId)&&integer("shape",1,2,r.shape)&&integer("flags",0,1,r.flags)
+            &&integer("max_hits",0,100000,r.maxHits);
+        double damage{},repeat{};valid=valid&&valid_number(L,t,"damage",damage)&&valid_number(L,t,"repeat_seconds",repeat);
+        r.damage=float(damage);r.repeatSeconds=float(repeat);
+        const char* axes[]={"x","y","z"};for(int j=0;j<3;j++){double v{};valid=valid&&valid_number(L,t,axes[j],v);r.origin[j]=float(v);}
+        lua_getfield(L,t,"geometry");valid=valid&&lua_istable(L,-1)&&lua_rawlen(L,-1)==24;
+        if(valid)for(int j=0;j<24;j++){lua_rawgeti(L,-1,j+1);int ok{};const auto v=lua_tonumberx(L,-1,&ok);lua_pop(L,1);valid=valid&&ok&&std::isfinite(v);r.geometry[j]=float(v);}
+        lua_pop(L,2);if(!valid){lua_pushboolean(L,false);return 1;}rows.push_back(r);
+    }
+    lua_pushboolean(L,bridge.publish_attacks(true,host.collisionEpoch,host.worldId,rows));return 1;
+}
 int status(lua_State* L){
     std::scoped_lock lock(mutex);poll_terrain_worker();const auto state=bridge.collision_status();const auto* reason=not_ready_reason(&state);const auto now=GetTickCount64();lua_createtable(L,0,48);
+    ifield(L,"npc_attack_published",bridge.attackPublished);ifield(L,"npc_attack_rejected",bridge.attackRejected);
     bfield(L,"collision_async_supported",true);ifield(L,"collision_job_id",terrainTicket);sfield(L,"collision_job_state",terrainState.c_str());
     sfield(L,"collision_job_error",terrainError.c_str());ifield(L,"collision_job_publish_seq",terrainPublishedSeq);
     bfield(L,"connected",state.connected);bfield(L,"enabled",enabled);bfield(L,"ready",reason==nullptr);sfield(L,"not_ready_reason",reason?reason:"ready");
@@ -356,7 +380,7 @@ int set_camera(lua_State* L){
 }
 void on_lua(lua_State* L){
     const auto v=lua_version(L);if(v!=504){api->functions->log_error("OnimushaMC: incompatible Lua ABI %f",v);return;}
-    static const luaL_Reg functions[]={{"submit_host",submit},{"tick_host",submit},{"read_mc",read_mc},{"get_mc_state",read_mc},{"drain_events",drain_events},{"poll_events",drain_events},{"set_enabled",set_enabled},{"send_hurt",send_hurt},{"status",status},{"publish_actors",publish_actors},{"publish_collision_tris",publish_tris},{"drain_solids",drain_solids},{"set_camera",set_camera},{nullptr,nullptr}};
+    static const luaL_Reg functions[]={{"submit_host",submit},{"tick_host",submit},{"read_mc",read_mc},{"get_mc_state",read_mc},{"drain_events",drain_events},{"poll_events",drain_events},{"set_enabled",set_enabled},{"send_hurt",send_hurt},{"publish_attacks",publish_attacks},{"status",status},{"publish_actors",publish_actors},{"publish_collision_tris",publish_tris},{"drain_solids",drain_solids},{"set_camera",set_camera},{nullptr,nullptr}};
     luaL_newlib(L,functions);lua_pushcfunction(L,snapshot_cubes);lua_setfield(L,-2,"snapshot_full_cubes");
     lua_pushcfunction(L,read_render_mc);lua_setfield(L,-2,"read_render_mc");
     lua_pushcfunction(L,soul_reward);lua_setfield(L,-2,"reward_absorbed_soul");

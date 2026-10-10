@@ -234,3 +234,24 @@ in-flight snapshot are discarded without rejecting surviving parts. Unknown futu
 models, duplicates or more than512 entries are rejected. Legacy offset receipts remain accepted.
 The 150ms ownership lease and epoch/context gates still apply. Empty receipts release a stream.
 Uniform vertex colors are carried as instance tint; nonuniform colors remain baked in the model.
+## Onimusha NPC incoming attacks (protocol 16, 2026-10-10)
+
+`publish_attacks(enabled, rows)` publishes up to 128 owned numeric attack records per call.
+It requires live takeover and a live MC peer; disabling revokes queued attacks by changing the
+session. There are no retained SDK objects or native pointers. Malformed batches are rejected
+before the ring head advances. `status()` adds `npc_attack_published` and `npc_attack_rejected`.
+
+Each row has `attacker` (the published native actor id), `attack` (AttackUniqueID), `hit` (HitID),
+`shape` (1 capsule/sphere, 2 OBB), `flags` (bit0 multi-hit), `damage` (MC points), `repeat_seconds`,
+`max_hits` (0 unlimited for multi-hit), source `x/y/z`, and 24 finite `geometry` numbers.
+Capsule geometry is current endpoint A/B/radius then previous endpoint A/B/radius, with zeros
+in the unused tail. A sphere repeats its center for both endpoints. OBB is center, three unit
+axes and three half extents. All positions/radii are mapped into MC coordinates by Lua.
+
+The new ring follows the existing render ring: 4096 records, 192 bytes each, data at0x80.
+Header fields are head(u64)@0, enabled/session/epoch/world(u32)@8/12/16/20, tail(u64)@0x40.
+The producer fills timestamp/session/epoch/world itself. Java consumes on the integrated server
+thread and rejects stale (>250ms), invalid, inactive or foreign-session records. Install DLL
+and Fabric JAR together. Existing packet offsets and render/control APIs are unchanged.
+
+See `docs/ONIMUSHA-DYNAMIC-CACHE-AND-NPC-HITS.md` for validation and remaining limitations.
