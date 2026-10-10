@@ -5,10 +5,32 @@ import tempfile
 import threading
 import time
 import unittest
-from native_worker_io import atomic_json,completed_result,queued_requests
+from native_worker_io import atomic_json,completed_result,queued_requests,RequestInbox
+from unittest.mock import patch
 
 
 class WorkerIO(unittest.TestCase):
+    def test_completed_archive_is_not_rescanned_and_metadata_is_retired(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);queue=RequestInbox(root,1)
+            for n in range(100):
+                name=f'1_2_{n}';job=root/name;job.mkdir()
+                req=dict(id=name,model=n+1,world=5,epoch=6,mc_pid=7,generation=8,priority=n%2)
+                atomic_json(job/'request.json',req);atomic_json(queue.inbox/(name+'.json'),req)
+            old_glob=Path.glob
+            def guarded(path, pattern, *args, **kwargs):
+                self.assertNotEqual(path,root,'historical archive scanned in steady state')
+                return old_glob(path,pattern,*args,**kwargs)
+            with patch.object(Path,'glob',guarded):
+                for path in queue.queued():
+                    req=json.loads(path.read_text());atomic_json(path.parent/'result.json',dict(req,ok=True,empty=True))
+                    queue.finish(path.parent)
+                for _ in range(100):self.assertEqual(queue.queued(),[])
+            self.assertEqual(queue.metadata,{})
+            self.assertEqual(queue.completed,100)
+            restarted=RequestInbox(root,1)
+            self.assertEqual(restarted.completed,100);self.assertEqual(restarted.queued(),[])
+
     def test_windows_reader_lock_retries_without_partial_json(self):
         k=ctypes.WinDLL('kernel32',use_last_error=True)
         k.CreateFileW.restype=ctypes.c_void_p

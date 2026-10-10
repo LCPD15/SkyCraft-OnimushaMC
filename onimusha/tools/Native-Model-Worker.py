@@ -17,7 +17,7 @@ from types import SimpleNamespace
 sys.path.insert(0,str(Path(__file__).parent))
 from native_model_input import convert_model
 
-from native_worker_io import atomic_json,completed_result,queued_requests
+from native_worker_io import atomic_json,completed_result,RequestInbox
 from native_model_loader import add_loader,LOADER_VERSION
 from native_model_cache import ModelCache,converter_fingerprint
 
@@ -46,20 +46,23 @@ def main():
     cache=ModelCache(a.out,converter_fingerprint(Path(__file__).parent,
         (opts.material_template,opts.tex_template),a.addon,bpy.app.version_string))
     cache_hits=0;cache_misses=0
-    done=set();unpublished={};metadata={};started=time.time();built=0;last_heartbeat=0
+    inbox=RequestInbox(root,a.host_pid);unpublished={};started=time.time();built=0;last_heartbeat=0
     known_assets={p.name for p in a.out.glob('section_*') if p.is_dir()} if a.out.exists() else set()
     cache_bytes=sum(p.stat().st_size for p in a.out.glob('section_*/*') if p.is_file()) if a.out.exists() else 0
     def heartbeat():
         nonlocal last_heartbeat
         if time.monotonic()-last_heartbeat<1:return
         last_heartbeat=time.monotonic()
-        atomic_json(root/'worker.json',dict(host_pid=a.host_pid,pid=os.getpid(),state='ready',jobs=len(done),built=built,
+        atomic_json(root/'worker.json',dict(host_pid=a.host_pid,pid=os.getpid(),state='ready',jobs=inbox.completed,built=built,queue_version=2,
             publishing=len(unpublished),alive_at=time.time(),started=started,
             cache_hits=cache_hits,cache_misses=cache_misses,cache_directory=str(cache.index),converter=cache.fingerprint))
     def publish(job,result):
         if not atomic_json(job/'result.json',result):
             unpublished[job.name]=result;return
-        unpublished.pop(job.name,None);done.add(job.name)
+        try:inbox.finish(job)
+        except OSError:
+            unpublished[job.name]=result;return
+        unpublished.pop(job.name,None)
         p=job/'section.bin'
         try:p.unlink(missing_ok=True)
         except PermissionError:pass
@@ -67,16 +70,15 @@ def main():
     while k.WaitForSingleObject(handle,0)==258:
         heartbeat()
         processed=0
-        for path in queued_requests(root,a.host_pid,done,metadata):
+        for path in inbox.queued():
             if k.WaitForSingleObject(handle,0)!=258:break
-            if path.parent.name in done:continue
             heartbeat();job=path.parent
             if job.name in unpublished:
                 publish(job,unpublished[job.name]);continue
             if processed>=4:break  # discover newly placed blocks before draining old entity faces
             result=dict(id=job.name,ok=False)
             try:
-                assert re.fullmatch(r'\d+_\d+_\d+',job.name) and len(done)<=8192
+                assert re.fullmatch(r'\d+_\d+_\d+',job.name)
                 req=json.loads(path.read_text(encoding='utf-8'));assert req['id']==job.name and req['host_pid']==a.host_pid
                 result['white_flash']=req.get('white_flash',False)
                 previous=completed_result(job,req)
@@ -87,7 +89,7 @@ def main():
                         previous['files']=add_loader(a.game,previous['asset_id'],previous['files'])
                         previous['loader_version']=LOADER_VERSION
                         publish(job,previous)
-                    else:done.add(job.name)
+                    else:inbox.finish(job)
                     continue
                 processed+=1
                 result.update(model=req['model'],world=req['world'],epoch=req['epoch'],mc_pid=req['mc_pid'],generation=req['generation'])
@@ -135,7 +137,7 @@ def main():
             # Result is the readiness fence, after every asset is completely written.
             publish(job,result)
         time.sleep(.05 if processed else .25)
-    atomic_json(root/'worker.json',dict(host_pid=a.host_pid,pid=os.getpid(),state='host_exited',jobs=len(done),built=built))
+    atomic_json(root/'worker.json',dict(host_pid=a.host_pid,pid=os.getpid(),state='host_exited',jobs=inbox.completed,built=built))
     k.CloseHandle(handle)
 
 if __name__=='__main__':main()

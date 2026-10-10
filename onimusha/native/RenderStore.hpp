@@ -60,6 +60,7 @@ struct CubePosition { std::int32_t x{}, y{}, z{}; };
 struct CubeSnapshot { std::vector<CubePosition> rows; std::size_t total{}; };
 struct RenderStore {
     Texture atlas;
+    Texture baseAtlas; // immutable full upload, excluding animated region updates
     std::uint64_t atlasBaseRevision{};
     std::uint32_t nextModelId{};
     std::uint32_t nextDynamicFaceId{};
@@ -67,6 +68,8 @@ struct RenderStore {
     std::map<std::uint32_t,Mesh> blockModels;
     std::map<std::uint32_t,std::uint32_t> modelTextures;
     std::unordered_map<std::string,std::uint32_t> modelKeys;
+    std::map<std::uint32_t,std::uint64_t> modelLastUsed;
+    std::uint64_t modelEvicted{},modelCacheHits{};
     std::map<std::uint32_t, Texture> textures;
     std::map<SectionKey, Mesh> sections;
     std::map<SectionKey,std::vector<proto::RenLight>> lights;
@@ -106,6 +109,8 @@ struct RenderStore {
     void remap_instance_section(SectionKey key,std::uint64_t expires);
     void register_models(Mesh& mesh,SectionKey key);
     std::uint32_t register_model(Mesh model,std::uint32_t textureId);
+    void trim_model_cache();
+    void invalidate_texture_models(std::uint32_t textureId);
     const Texture* model_texture(std::uint32_t model)const;
     void prepare_dynamic();
     bool accept_dynamic(unsigned stream,const std::map<std::uint32_t,std::uint32_t>&faces,std::uint64_t now,bool stableIds=false);

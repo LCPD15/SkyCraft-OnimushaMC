@@ -94,6 +94,9 @@ public final class AvatarExporter implements SubmitNodeCollector {
 
 	// Textures Skyrim holds, shared by both captures.
 	private static final Map<Identifier, Integer> TEXTURE_IDS = new HashMap<>();
+	// A reconnect changes delivery state, not a texture's identity. First/third
+	// person may enumerate textures in different orders after F10.
+	private static final Map<Identifier, Integer> STABLE_TEXTURE_IDS = new HashMap<>();
 	private static final Set<Identifier> UNUSABLE = new HashSet<>();
 	private static int nextTextureId = 1;
 	private static @Nullable ModelBlockRenderer movingBlocks;
@@ -120,7 +123,6 @@ public final class AvatarExporter implements SubmitNodeCollector {
 	static void reset() {
 		TEXTURE_IDS.clear();
 		UNUSABLE.clear();
-		nextTextureId = 1;
 		AVATAR.shown = false;
 		SCENE.shown = false;
 		RAGDOLL.shown = false;
@@ -679,7 +681,8 @@ public final class AvatarExporter implements SubmitNodeCollector {
 			SkyCraft.LOG.info("SkyCraft: texture {} isn't available to Skyrim; what uses it is left out", texture);
 			return -1;
 		}
-		int id = nextTextureId++;
+		Integer previousId = STABLE_TEXTURE_IDS.get(texture);
+		int id = previousId != null ? previousId : nextTextureId;
 		try (image) {
 			int w = image.getWidth(), h = image.getHeight();
 			ByteBuffer pixels = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.LITTLE_ENDIAN);
@@ -692,10 +695,10 @@ public final class AvatarExporter implements SubmitNodeCollector {
 			pixels.flip();
 			ByteBuffer header = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN).putInt(id).putInt(w).putInt(h).putInt(0).flip();
 			if (!SkyLink.writeRender(Proto.REN_TEXTURE, header, pixels)) {
-				nextTextureId--;
 				return -1;
 			}
 		}
+		if (previousId == null) { STABLE_TEXTURE_IDS.put(texture, id); nextTextureId++; }
 		TEXTURE_IDS.put(texture, id);
 		SkyCraft.LOG.info("SkyCraft: sent texture {} to Skyrim (id {})", texture, id);
 		return id;

@@ -3,6 +3,9 @@
 -- MOD鍒朵綔锛歀CPD15/LCPD鎷夌伅
 local q={frame=0,instances={},holders={},warm_retired={},phase='disabled',created=0,removed=0,receipts=0}
 local pending={} -- host/model IDs never reused by the DLL during its lifetime
+local loading_resources={}
+local RESOURCE_CACHE=512 -- idle dependencies only; live objects retain their exact owners
+local PENDING_LIMIT=32
 local lights={}
 local dynamics={}
 -- Disabled Mesh instances keep their engine-owned dependencies. They may be reused
@@ -29,7 +32,7 @@ end
 local function owned_count()
     local n=#q.warm_retired
     for _,b in pairs(q.instances)do if b.owner.owned_display then n=n+1 end end
-    for _,r in pairs(q.holders)do if r.go then n=n+1 end end
+    for _,r in pairs(loading_resources)do if r.go then n=n+1 end end
     for _ in pairs(lights)do n=n+1 end
     for _ in pairs(dynamics)do n=n+1 end
     n=n+pool_count
@@ -137,9 +140,35 @@ local function poll_resources()
         local b=q.warm_retired[i]
         if q.frame-b.frame>10 and not call(b.go,'get_Valid') then table.remove(q.warm_retired,i) end
     end
-    for _,r in pairs(q.holders) do
+    for kind,r in pairs(loading_resources) do
         local ok,err=pcall(poll_resource,r)
         if not ok then r.error=tostring(err);r.phase='error';retire_warmer(r) end
+        if r.phase~='userdata' and r.phase~='mesh' then loading_resources[kind]=nil end
+    end
+end
+local function prune_resources()
+    -- Retired components retain their own dependency graph until destruction.
+    -- Drop only cache references; do not release a holder used by a visible or
+    -- pooled Mesh, and never destroy/rebind a live component to reclaim memory.
+    local live={}
+    for _,b in pairs(q.instances)do live[b.holders]=true end
+    local function keep(r)if r.asset_owner then live[r.asset_owner]=true end;if r.white_asset_owner then live[r.white_asset_owner]=true end end
+    for _,r in pairs(dynamics)do keep(r)end
+    for _,rows in pairs(dynamic_pool)do for _,r in ipairs(rows)do keep(r)end end
+    for _,r in ipairs(q.warm_retired)do if r.asset then live[r.asset]=true end;if r.white_asset then live[r.white_asset]=true end end
+    local idle={}
+    for kind,r in pairs(q.holders)do
+        if not live[r] and not loading_resources[kind] and (r.used or 0)<q.frame-120 then idle[#idle+1]={kind=kind,used=r.used or 0}end
+    end
+    table.sort(idle,function(a,b)return a.used>b.used end)
+    for i=RESOURCE_CACHE+1,#idle do
+        local kind=idle[i].kind;q.holders[kind]=nil;pending[kind]=nil
+        q.resources_evicted=(q.resources_evicted or 0)+1
+    end
+    -- Incomplete requests from a vanished scene must not fill the admission
+    -- window forever. Their immutable results remain available on disk/cache.
+    for kind,job in pairs(pending)do
+        if not q.holders[kind] and (job.used or 0)<q.frame-600 then pending[kind]=nil end
     end
 end
 local function resources(kind,c,p,priority,white_flash)
@@ -147,16 +176,22 @@ local function resources(kind,c,p,priority,white_flash)
     kind=assert(math.tointeger(kind),'Invalid cube kind');assert(kind>=1 and kind<=0xffffffff,'Invalid model ID')
     local cache_key=white_flash and -kind or kind
     local r=q.holders[cache_key]
+    if r then r.used=q.frame end
     if r and (r.ready or r.phase=='userdata' or r.phase=='mesh' or r.error) then return r end
     if not r then
         local job=pending[cache_key]
+        if job then job.used=q.frame end
         if not job then
-            local worker=read_json('onimusha_mc/native_models/worker.json')
-            q.worker=worker
+            local waiting=0;for _,j in pairs(pending)do if not j.result then waiting=waiting+1 end end
+            if waiting>=PENDING_LIMIT then return nil end
+            -- Missing resources must not perform one disk read per face per frame.
+            if not q.worker_poll or q.frame>=q.worker_poll then q.worker=read_json('onimusha_mc/native_models/worker.json');q.worker_poll=q.frame+30 end
+            local worker=q.worker
             if not worker or worker.host_pid~=c.host_pid or worker.state~='ready' or math.abs(os.time()-worker.alive_at)>30 then return nil end
             if q.frame%3~=0 then return nil end
+            if q.capture_attempt==q.frame then return nil end;q.capture_attempt=q.frame
             local id=c.bridge.capture_native_model({model=kind,epoch=c.epoch,priority=priority or 0,white_flash=white_flash==true})
-            if id then pending[cache_key]={id=id,epoch=c.epoch,world=c.world_id,mc_pid=c.mc_pid,generation=c.generation} end
+            if id then pending[cache_key]={id=id,epoch=c.epoch,world=c.world_id,mc_pid=c.mc_pid,generation=c.generation,used=q.frame} end
             return nil
         end
         local poll_interval=priority==1 and 3 or 15
@@ -171,24 +206,25 @@ local function resources(kind,c,p,priority,white_flash)
         end
         if not job.result then return nil end
         if job.result.ok and job.result.empty then
-            r={ready=true,empty=true};q.holders[cache_key]=r;return r
+            r={ready=true,empty=true,used=q.frame};q.holders[cache_key]=r;return r
         end
         if not job.result.ok or not job.result.asset_id then
-            r={error=job.result.error or 'unsupported_model'};q.holders[cache_key]=r;return r
+            r={error=job.result.error or 'unsupported_model',used=q.frame};q.holders[cache_key]=r;return r
         end
     end
     if q.resource_allocated>=2 or owned_count()>=2560 then return nil end
-    local loading=0;for _,value in pairs(q.holders)do if value.phase=='userdata' or value.phase=='mesh' then loading=loading+1 end end
+    local loading=0;for _ in pairs(loading_resources)do loading=loading+1 end
     if loading>=8 then return nil end
     q.resource_allocated=q.resource_allocated+1
     if not r then
         local row=assert(pending[cache_key].result,'Missing model result')
         local id=row.asset_id;assert(type(id)=='string' and #id==28 and id:match('^section_%x+$'),'Invalid resource ID')
-        r={kind=kind,asset=id}
+        r={kind=kind,asset=id,used=q.frame}
         q.holders[cache_key]=r
     end
     r.prefix='mod/onimusha_mc/sections/'..r.asset..'/'..r.asset
     r.position=c.to_native(p.x+.5,p.y+.5,p.z+.5);r.folder=c.folder;r.start=q.frame;r.phase='userdata'
+    loading_resources[cache_key]=r
     local ok,err=pcall(function()
         r.loader=r.loader or pin(sdk.create_userdata_global('app.montage.data.MontagePartsModelData',r.prefix..'_loader.user'))
     end)
@@ -204,9 +240,12 @@ local function remove(k)
     q.instances[k]=nil;q.removed=q.removed+1
 end
 local function clear(reason,keep_dynamic)
+    if not q.context and not next(q.instances) and not next(lights) and not next(dynamics) and not next(loading_resources)
+        and (keep_dynamic or pool_count==0) then q.phase=reason or 'disabled';return end
     local keys={};for k in pairs(q.instances)do keys[#keys+1]=k end
     for _,k in ipairs(keys)do remove(k)end
-    for _,r in pairs(q.holders) do retire_warmer(r);if not r.ready and not r.error then r.phase='idle' end;r.folder=nil end
+    for _,r in pairs(loading_resources) do retire_warmer(r);if not r.ready and not r.error then r.phase='idle' end;r.folder=nil end
+    loading_resources={}
     for _,r in pairs(lights)do retire_warmer(r)end;lights={}
     for k,r in pairs(dynamics)do release_dynamic_object(k,r,keep_dynamic)end;dynamics={};q.dynamic_objects=0
     if not keep_dynamic then purge_dynamic_pool();q.pool_context=nil end
@@ -431,6 +470,7 @@ local function attach(owner,p,r)
 end
 local function tick()
     q.frame=q.frame+1;q.resource_allocated=0;q.result_polls=0
+    if q.frame%120==0 then prune_resources()end
     if q.frame%30==1 then dynamic_control()end
     if not dynamic_settings.enabled or dynamic_settings.preload_only then purge_dynamic_pool() end
     while pool_count>dynamic_settings.max_instances do evict_dynamic_pool()end
@@ -521,7 +561,7 @@ end
 function api.stop()clear('disabled',true)end
 function api.busy()
     if next(q.instances) or next(lights) or next(dynamics) or #q.warm_retired>0 then return true end
-    for _,r in pairs(q.holders) do if r.phase=='userdata' or r.go then return true end end
+    if next(loading_resources) then return true end
     return false
 end
 function api.status()
@@ -529,6 +569,7 @@ function api.status()
     local light_count=0;for _ in pairs(lights)do light_count=light_count+1 end
     local resources_ready,resources_loading,resource_errors=0,0,{}
     local diagnostics={}
+    local pending_count=0;for _,job in pairs(pending)do if not job.result then pending_count=pending_count+1 end end
     for kind,r in pairs(q.holders) do
         if r.ready then resources_ready=resources_ready+1 end
         if r.phase=='userdata' or r.go then resources_loading=resources_loading+1 end
@@ -536,6 +577,7 @@ function api.status()
         if r.diagnostic and #diagnostics<24 then diagnostics[#diagnostics+1]=r.diagnostic end
     end
     return{phase=q.phase,error=q.error,count=count,ready=q.ready or 0,desired=q.desired,created=q.created,removed=q.removed,
+        resources_evicted=q.resources_evicted or 0,resource_idle_limit=RESOURCE_CACHE,pending_requests=pending_count,pending_limit=PENDING_LIMIT,tick_ms=q.tick_ms,tick_max_ms=q.tick_max_ms,
         render_frame=q.render_frame,pose_mismatch=q.pose_mismatch or 0,
         dynamic_pool_cached=pool_count,dynamic_pool_hits=q.dynamic_pool_hits or 0,dynamic_pool_evicted=q.dynamic_pool_evicted or 0,
         receipts=q.receipts,waiting=q.waiting,resources_ready=resources_ready,resources_loading=resources_loading,lights=light_count,light_limit=64,
@@ -543,7 +585,9 @@ function api.status()
 end
 _G.onimusha_native_sections=api
 re.on_application_entry('LateUpdateBehavior',function()
+    local started=os.clock()
     local ok,err=pcall(tick)
+    q.tick_ms=(os.clock()-started)*1000;q.tick_max_ms=math.max(q.tick_max_ms or 0,q.tick_ms)
     if not ok then q.error=tostring(err);q.failed_key=q.context and q.context.key;pcall(clear,'failed');log.error('[Onimusha cube rendering] '..q.error) end
 end)
 re.on_script_reset(function()clear('script_reset');q.holders={};_G.onimusha_native_sections=nil end)

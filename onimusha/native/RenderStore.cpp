@@ -16,6 +16,9 @@ bool texture(Texture& out,std::span<const std::uint8_t> p,std::size_t off,std::u
     if(!w||!h||w>8192||h>8192) return false;
     const std::uint64_t size=std::uint64_t(w)*h*4;
     if(size>32ull*1024*1024||off>p.size()||size!=p.size()-off) return false;
+    // Reconnects resend unchanged textures. A transport revision is not a new
+    // appearance: keep its identity (and loaded native resources) when equal.
+    if(out.width==w&&out.height==h&&out.rgba.size()==size&&std::equal(out.rgba.begin(),out.rgba.end(),p.begin()+off))return true;
     out.width=w; out.height=h; out.rgba.assign(p.begin()+off,p.end()); out.revision=rev; return true;
 }
 bool mesh(Mesh& out,std::span<const std::uint8_t> p,std::size_t off,std::uint32_t bc,std::uint32_t vc,std::uint64_t rev) {
@@ -52,10 +55,36 @@ std::uint32_t RenderStore::register_model(Mesh model,std::uint32_t textureId){
     std::string bytes(reinterpret_cast<const char*>(model.vertices.data()),model.vertices.size()*sizeof(proto::RenVertex));
     const auto texRevision=textureId?t->revision:atlasBaseRevision;
     bytes.append(reinterpret_cast<const char*>(&textureId),sizeof(textureId));bytes.append(reinterpret_cast<const char*>(&texRevision),sizeof(texRevision));
-    auto found=modelKeys.find(bytes);if(found!=modelKeys.end())return found->second;
+    auto found=modelKeys.find(bytes);if(found!=modelKeys.end()){modelLastUsed[found->second]=revision;++modelCacheHits;return found->second;}
+    if(blockModels.size()>=4096||modelBytes+bytes.size()*2>64*1024*1024)trim_model_cache();
     if(blockModels.size()>=4096||modelBytes+bytes.size()*2>64*1024*1024||nextModelId==UINT32_MAX)return 0;
     const auto id=++nextModelId;modelBytes+=bytes.size()*2;model.nativeRevision=model.revision=id;
-    modelKeys.emplace(std::move(bytes),id);blockModels.emplace(id,std::move(model));modelTextures[id]=textureId;return id;
+    modelKeys.emplace(std::move(bytes),id);blockModels.emplace(id,std::move(model));modelTextures[id]=textureId;modelLastUsed[id]=revision;return id;
+}
+void RenderStore::invalidate_texture_models(std::uint32_t textureId){
+    std::set<std::uint32_t> drop;
+    for(auto i=modelKeys.begin();i!=modelKeys.end();){const auto id=i->second;
+        if(modelTextures.at(id)==textureId){drop.insert(id);modelBytes-=i->first.size()*2;blockModels.erase(id);modelTextures.erase(id);modelLastUsed.erase(id);i=modelKeys.erase(i);++modelEvicted;}else ++i;
+    }
+    if(textureId==0){nativeViews.clear();instanceReceiptValid=false;instanceReceipts.clear();++instanceRevision;}
+    for(auto*v:{&nativeAvatar,&nativeScene,&nativeHands})if(std::any_of(v->faces.begin(),v->faces.end(),[&](auto f){return drop.contains(f.model);})){
+        v->sourceRevision=0;v->remainder.revision=0;
+        std::erase_if(v->receipt,[&](auto r){return drop.contains(r.second);});
+    }
+}
+void RenderStore::trim_model_cache(){
+    // Never evict appearances referenced by visible blocks or current posed
+    // faces. IDs are monotonic: an old asynchronous receipt cannot name a new mesh.
+    std::set<std::uint32_t> live;
+    for(const auto&[k,m]:sections)for(auto p:m.nativeTriangles)if(p.kind)live.insert(p.kind);
+    for(const auto*v:{&nativeAvatar,&nativeScene,&nativeHands})for(auto f:v->faces)live.insert(f.model);
+    std::vector<std::pair<std::uint64_t,std::uint32_t>> cold;
+    for(auto[id,used]:modelLastUsed)if(!live.contains(id)&&used!=revision)cold.push_back({used,id});
+    std::sort(cold.begin(),cold.end());std::set<std::uint32_t> drop;
+    for(auto[used,id]:cold){drop.insert(id);if(blockModels.size()-drop.size()<=3072)break;}
+    for(auto i=modelKeys.begin();i!=modelKeys.end();)if(drop.contains(i->second)){
+        const auto id=i->second;modelBytes-=i->first.size()*2;blockModels.erase(id);modelTextures.erase(id);modelLastUsed.erase(id);i=modelKeys.erase(i);++modelEvicted;
+    }else ++i;
 }
 void RenderStore::register_models(Mesh&m,SectionKey k){
     std::map<unsigned,std::vector<std::size_t>> cells;
@@ -151,7 +180,9 @@ void RenderStore::clear() {
     for(const auto& [k,bits]:solids) for(int i=0;i<4096;i++) if(bits[i>>3]&(1u<<(i&7)))
         solidChanges.push_back({k.x*16+(i&15),k.y*16+(i>>8),k.z*16+((i>>4)&15),false});
     sections.clear();sectionAtlasRects.clear();invalidate_native_views();++instanceRevision;solids.clear(); fullCubes.clear();++cubeRevision;
-    blockModels.clear();modelTextures.clear();modelKeys.clear();modelBytes=0;lights.clear();
+    // CLEAR removes world instances, not immutable appearance cache. Retaining
+    // bounded IDs makes repeated F10 reconnects reuse Lua/GPU resources.
+    lights.clear();
     avatar={}; scene={};hands={}; worldEntities={}; ++revision;
     pendingPose={};renderPose={};poseFrames=false;
 }
@@ -224,13 +255,21 @@ bool RenderStore::consume(std::uint32_t type,std::span<const std::uint8_t> p) {
     }
     case proto::kRenClearAll: if(p.empty()){clear();cubeCleared=cubeConnected;ok=true;} break;
     case proto::kRenAtlas: {
-        proto::RenAtlas h; ok=read(p,h)&&texture(atlas,p,sizeof(h),h.width,h.height,rev);
-        if(ok){atlasBaseRevision=rev;blockModels.clear();modelTextures.clear();modelKeys.clear();modelBytes=0;animatedAtlasRects.clear();invalidate_native_views();++instanceRevision;for(auto&[key,m]:sections){m.nativeRevision=rev;register_models(m,key);sectionAtlasRects[key]=atlas_rects(m,atlas);}}break;
+        proto::RenAtlas h; ok=read(p,h)&&texture(baseAtlas,p,sizeof(h),h.width,h.height,rev);
+        if(ok)atlas=baseAtlas;
+        if(ok&&atlasBaseRevision!=atlas.revision){atlasBaseRevision=atlas.revision;invalidate_texture_models(0);animatedAtlasRects.clear();for(auto&[key,m]:sections){m.nativeRevision=rev;register_models(m,key);sectionAtlasRects[key]=atlas_rects(m,atlas);}}break;
     }
     case proto::kRenTexture: {
         proto::RenTexture h;
         if(read(p,h)&&h.id>0&&(textures.contains(h.id)||textures.size()<kMaxTextures)) {
-            Texture t; ok=texture(t,p,sizeof(h),h.width,h.height,rev); if(ok) textures[h.id]=std::move(t);
+            auto found=textures.find(h.id);
+            if(found==textures.end()){
+                Texture t;ok=texture(t,p,sizeof(h),h.width,h.height,rev);
+                if(ok)textures.emplace(h.id,std::move(t));
+            }else{
+                auto& t=found->second;const auto before=t.revision;ok=texture(t,p,sizeof(h),h.width,h.height,rev);
+                if(ok&&before!=t.revision)invalidate_texture_models(h.id);
+            }
         } break;
     }
     case proto::kRenAtlasRegion: {

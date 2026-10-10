@@ -7,6 +7,7 @@
 #include "NativeSectionTests.hpp"
 #include "DynamicModelsTests.hpp"
 #include "PoseFrameTests.hpp"
+#include "RenderLifetimeTests.hpp"
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -36,6 +37,7 @@ int peer(const wchar_t* name){
 int wmain(int argc,wchar_t** argv){
     if(argc>3&&std::wstring(argv[1])==L"--collision-peer")return omc::tests::collision_peer(argv[2],std::uint32_t(std::wcstoul(argv[3],nullptr,10)));
     if(argc>2&&std::wstring(argv[1])==L"--peer")return peer(argv[2]);
+    omc::tests::render_lifetime_tests(check);
     check(f10_key_action(WM_SYSKEYDOWN,VK_F10,0)==ToggleKeyAction::toggle&&f10_key_action(WM_KEYDOWN,VK_F10,0)==ToggleKeyAction::toggle,"F10 first normal/system key-down toggles bridge");
     check(f10_key_action(WM_SYSKEYDOWN,VK_F10,1ll<<30)==ToggleKeyAction::consume&&f10_key_action(WM_KEYDOWN,VK_F10,1ll<<30)==ToggleKeyAction::consume,"F10 repeated down is consumed without toggling");
     check(f10_key_action(WM_SYSKEYUP,VK_F10,0)==ToggleKeyAction::consume&&f10_key_action(WM_KEYUP,VK_F10,0)==ToggleKeyAction::consume,"F10 normal/system key-up is consumed without toggling");

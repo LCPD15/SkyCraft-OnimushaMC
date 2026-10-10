@@ -6,7 +6,7 @@
 #include <algorithm>
 namespace omc {
 std::string NativeSectionMailbox::request_model(const std::filesystem::path&root,const RenderStore&s,std::uint32_t model,unsigned priority,bool whiteFlash){
-    if(busy()||sequence>=8192||!s.cubeConnected||!s.cubeCleared||s.atlas.rgba.empty())return {};
+    if(busy()||sequence==UINT64_MAX||!s.cubeConnected||!s.cubeCleared||s.atlas.rgba.empty())return {};
     auto it=s.blockModels.find(model);if(it==s.blockModels.end())return {};
     if(!session)session=GetTickCount64();
     const auto id=std::to_string(GetCurrentProcessId())+"_"+std::to_string(session)+"_"+std::to_string(++sequence);
@@ -38,7 +38,11 @@ std::string NativeSectionMailbox::request_model(const std::filesystem::path&root
             std::ostringstream j;j<<"{\"id\":\""<<id<<"\",\"host_pid\":"<<GetCurrentProcessId()<<",\"world\":"<<world<<",\"epoch\":"<<epoch<<",\"mc_pid\":"<<pid<<",\"generation\":"<<gen<<",\"model\":"<<model<<",\"atlas\":\""<<atlasName<<"\",\"animated\":[";
             bool first=true;for(auto r:rects){if(!first)j<<',';first=false;j<<'['<<r.x<<','<<r.y<<','<<r.w<<','<<r.h<<']';}j<<"]}";
             auto data=j.str();data.pop_back();data+=",\"priority\":"+std::to_string(std::min(priority,2u))+",\"white_flash\":"+(whiteFlash?"true":"false")+"}";
-            write(dir/"request.tmp",data.data(),data.size(),"",0);std::filesystem::rename(dir/"request.tmp",dir/"request.json");return {};
+            write(dir/"request.tmp",data.data(),data.size(),"",0);std::filesystem::rename(dir/"request.tmp",dir/"request.json");
+            // Only pending tickets are scanned. Completed results remain directly
+            // addressable without a growing per-poll walk of all historical jobs.
+            const auto inbox=root/"inbox";std::filesystem::create_directories(inbox);
+            write(inbox/(id+".tmp"),data.data(),data.size(),"",0);std::filesystem::rename(inbox/(id+".tmp"),inbox/(id+".json"));return {};
         }catch(const std::exception&e){return e.what();}
     });return id;
 }
