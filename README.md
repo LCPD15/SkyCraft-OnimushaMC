@@ -19,6 +19,10 @@ Use Minecraft controls, combat, UI, items and building inside **OnimushaWotS**. 
 
 The Windows package contains the native plugin, Lua adapter, conversion worker and importable Minecraft instance. Minecraft, Java, Blender and REFramework are external prerequisites; no commercial game files, accounts or personal saves are bundled.
 
+## 演示视频 / Gameplay video
+
+[观看 MOD 实机演示 / Watch the mod demonstration on Bilibili](https://www.bilibili.com/video/BV1mrpg6eEK2)
+
 ## 实机截图 / Gameplay screenshots
 
 第一人称战斗、TNT 方块与吸魂奖励。 / First-person combat, TNT blocks and soul rewards.
